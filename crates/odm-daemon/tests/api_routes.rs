@@ -99,6 +99,7 @@ async fn full_rest_lifecycle_test() {
         target_dir: Some(dir.path().to_string_lossy().to_string()),
         filename: Some("sample.bin".to_string()),
         queue: Some("default".to_string()),
+        category: None,
         options: None,
     })
     .unwrap();

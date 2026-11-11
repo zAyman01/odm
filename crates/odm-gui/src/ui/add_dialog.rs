@@ -119,6 +119,7 @@ pub fn render_add_dialog(
                                 Some(state.add_dialog.target_dir.clone())
                             },
                             queue: Some(state.add_dialog.queue.clone()),
+                            category: None,
                             options: Some(JobOptionsDto {
                                 segments: Some(state.add_dialog.segments),
                                 speed_limit: if state.add_dialog.speed_limit == 0 {

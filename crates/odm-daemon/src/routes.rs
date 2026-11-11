@@ -189,7 +189,31 @@ pub async fn add_download_handler(
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
     let store = state.engine.store();
 
-    let (target_dir, category_name) = if let Some(dir) = req.target_dir {
+    let (target_dir, category_name) = if let Some(cat_name) = req.category {
+        let cat = store.get_category(&cat_name).ok();
+        let cat_dir = cat.and_then(|c| {
+            if c.directory.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(c.directory))
+            }
+        });
+        let dir = if let Some(dir) = req.target_dir {
+            PathBuf::from(dir)
+        } else if let Some(cd) = cat_dir {
+            cd
+        } else {
+            let base_dir = if let Ok(Some(d)) = store.get_setting("download_dir") {
+                PathBuf::from(d)
+            } else {
+                directories::UserDirs::new()
+                    .and_then(|u| u.download_dir().map(|p| p.to_path_buf()))
+                    .unwrap_or_else(|| PathBuf::from("./downloads"))
+            };
+            base_dir.join(&cat_name)
+        };
+        (dir, Some(cat_name))
+    } else if let Some(dir) = req.target_dir {
         (PathBuf::from(dir), None)
     } else {
         let candidate_filename = req

@@ -405,7 +405,15 @@ impl Store {
         schedule: Option<Option<crate::schedule::QueueSchedule>>,
     ) -> Result<Queue, StoreError> {
         let connection = self.lock()?;
-        let current = self.queue_by_name(name)?;
+        let current = connection
+            .query_row(
+                "SELECT id, name, max_concurrent, schedule_start, schedule_stop, schedule_days FROM queues WHERE name = ?1",
+                params![name],
+                db_queue_from_row,
+            )
+            .optional()?
+            .ok_or_else(|| StoreError::QueueNotFound(name.to_string()))?;
+
         let new_max = max_concurrent.unwrap_or(current.max_concurrent);
         let new_schedule = match schedule {
             Some(opt) => opt,
@@ -422,7 +430,17 @@ impl Store {
             "UPDATE queues SET max_concurrent = ?2, schedule_start = ?3, schedule_stop = ?4, schedule_days = ?5 WHERE name = ?1",
             params![name, i64::from(new_max), start, stop, days_json],
         )?;
-        self.queue_by_name(name)
+
+        let updated = connection
+            .query_row(
+                "SELECT id, name, max_concurrent, schedule_start, schedule_stop, schedule_days FROM queues WHERE name = ?1",
+                params![name],
+                db_queue_from_row,
+            )
+            .optional()?
+            .ok_or_else(|| StoreError::QueueNotFound(name.to_string()))?;
+
+        Ok(updated)
     }
 
     /// Lists the jobs of a queue in execution order.

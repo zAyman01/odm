@@ -2489,6 +2489,7 @@ dependencies = [
  "clap",
  "directories",
  "odm-api",
+ "odm-core",
  "odm-daemon",
  "reqwest",
  "serde",

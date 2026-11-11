@@ -61,6 +61,21 @@ pub enum Command {
 
         #[arg(short = 'H', long = "header", help = "Custom header 'Key: Value'")]
         headers: Vec<String>,
+
+        #[arg(
+            long = "checksum",
+            help = "Checksum in algo:digest format (e.g. sha256:...)"
+        )]
+        checksum: Option<String>,
+
+        #[arg(long = "mirror", help = "Mirror download URL")]
+        mirror: Vec<String>,
+
+        #[arg(long = "metalink", help = "Path to .metalink or .meta4 file")]
+        metalink: Option<String>,
+
+        #[arg(long = "category", help = "Category name")]
+        category: Option<String>,
     },
 
     #[command(about = "List downloads")]
@@ -114,6 +129,9 @@ pub enum Command {
     #[command(subcommand, about = "Manage download queues")]
     Queue(QueueCommand),
 
+    #[command(subcommand, about = "Manage download categories")]
+    Category(CategoryCommand),
+
     #[command(subcommand, about = "Daemon management commands")]
     Daemon(DaemonCommand),
 }
@@ -141,7 +159,46 @@ pub enum QueueCommand {
         concurrency: u32,
     },
 
+    #[command(about = "Configure queue schedule")]
+    Schedule {
+        #[arg(required = true)]
+        name: String,
+
+        #[arg(long = "start", required = true, help = "Start time HH:MM")]
+        start: String,
+
+        #[arg(long = "stop", help = "Stop time HH:MM")]
+        stop: Option<String>,
+
+        #[arg(long = "days", help = "Active days comma-separated (e.g. mon,tue,wed)")]
+        days: Option<String>,
+    },
+
     #[command(about = "Delete a queue")]
+    Delete {
+        #[arg(required = true)]
+        name: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum CategoryCommand {
+    #[command(about = "List categories")]
+    List,
+
+    #[command(about = "Create or update a category")]
+    Set {
+        #[arg(required = true)]
+        name: String,
+
+        #[arg(long = "dir", help = "Target download directory")]
+        dir: Option<String>,
+
+        #[arg(long = "exts", help = "File extensions comma-separated")]
+        exts: Option<String>,
+    },
+
+    #[command(about = "Delete a category")]
     Delete {
         #[arg(required = true)]
         name: String,

@@ -424,7 +424,7 @@ git commit -m "feat(daemon): implement queue scheduling and background schedule 
   - `odm category list|set|delete`
   - `odm queue schedule <name> --start <HH:MM> --stop <HH:MM> --days <days>`
 
-- [ ] **Step 1: Write CLI M5 integration test first**
+- [x] **Step 1: Write CLI M5 integration test first**
 
 `crates/odm-cli/tests/m5_cli_features.rs`:
 - Test CLI `odm add` with batch bracket URL: expands and submits multiple jobs.
@@ -432,7 +432,7 @@ git commit -m "feat(daemon): implement queue scheduling and background schedule 
 - Test CLI `odm category list` and `odm category set`.
 - Test CLI `odm queue schedule`.
 
-- [ ] **Step 2: Implement CLI commands and flag parsing**
+- [x] **Step 2: Implement CLI commands and flag parsing**
 
 In `crates/odm-cli/src/commands/add.rs`:
 - Expand batch patterns with `odm_core::batch::expand_batch_url`.
@@ -444,7 +444,7 @@ In `crates/odm-cli/src/commands/category.rs`:
 In `crates/odm-cli/src/commands/queue.rs`:
 - Subcommand `schedule` with `--start`, `--stop`, `--days`.
 
-- [ ] **Step 3: Run CLI tests and verify gate**
+- [x] **Step 3: Run CLI tests and verify gate**
 
 Run:
 ```bash
@@ -455,7 +455,7 @@ cargo test --workspace
 cargo deny check
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add crates/odm-cli

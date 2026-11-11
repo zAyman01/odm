@@ -6,11 +6,13 @@ mod commands;
 mod format;
 
 use clap::Parser;
-use commands::{Cli, Command, DaemonCommand, QueueCommand};
-use odm_api::{AddDownloadRequest, JobOptionsDto};
+use commands::{CategoryCommand, Cli, Command, DaemonCommand, QueueCommand};
+use odm_api::{AddDownloadRequest, ChecksumAlgorithm, ChecksumDto, JobOptionsDto};
 
 use crate::client::DaemonClient;
-use crate::format::{print_download_detail, print_downloads_table, print_queues_table};
+use crate::format::{
+    print_categories_table, print_download_detail, print_downloads_table, print_queues_table,
+};
 
 #[tokio::main]
 async fn main() {
@@ -77,7 +79,59 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
             limit,
             queue,
             headers,
+            checksum,
+            mirror,
+            metalink,
+            category,
         } => {
+            let mut final_urls = Vec::new();
+            let mut metalink_checksum = None;
+            let mut all_mirrors = mirror;
+
+            if let Some(metalink_path) = metalink {
+                let xml = std::fs::read_to_string(&metalink_path)
+                    .map_err(|e| format!("Failed to read metalink file '{metalink_path}': {e}"))?;
+                let spec = odm_core::metalink::parse_metalink(&xml)
+                    .map_err(|e| format!("Failed to parse metalink: {e}"))?;
+                if let Some(first_url) = spec.urls.first() {
+                    final_urls.push(first_url.clone());
+                    for m in spec.urls.iter().skip(1) {
+                        all_mirrors.push(m.clone());
+                    }
+                }
+                if let Some(ref cs) = spec.checksum {
+                    let algorithm = match cs.algorithm {
+                        odm_core::checksum::ChecksumAlgorithm::Sha256 => ChecksumAlgorithm::Sha256,
+                        odm_core::checksum::ChecksumAlgorithm::Sha1 => ChecksumAlgorithm::Sha1,
+                        odm_core::checksum::ChecksumAlgorithm::Md5 => ChecksumAlgorithm::Md5,
+                    };
+                    metalink_checksum = Some(ChecksumDto {
+                        algorithm,
+                        digest: cs.expected.clone(),
+                    });
+                }
+            }
+
+            for url in urls {
+                match odm_core::batch::expand_batch_url(&url) {
+                    Ok(expanded) => final_urls.extend(expanded),
+                    Err(_) => final_urls.push(url),
+                }
+            }
+
+            if final_urls.is_empty() {
+                return Err("No URLs specified".to_string());
+            }
+
+            let parsed_checksum = if let Some(ref cs) = checksum {
+                Some(
+                    cs.parse::<ChecksumDto>()
+                        .map_err(|e| format!("Invalid checksum: {e}"))?,
+                )
+            } else {
+                metalink_checksum
+            };
+
             let parsed_headers = if headers.is_empty() {
                 None
             } else {
@@ -90,7 +144,18 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
                 Some(h_vec)
             };
 
-            let options = if segments.is_some() || limit.is_some() || parsed_headers.is_some() {
+            let mirrors_opt = if all_mirrors.is_empty() {
+                None
+            } else {
+                Some(all_mirrors)
+            };
+
+            let options = if segments.is_some()
+                || limit.is_some()
+                || parsed_headers.is_some()
+                || parsed_checksum.is_some()
+                || mirrors_opt.is_some()
+            {
                 Some(JobOptionsDto {
                     segments,
                     speed_limit: limit,
@@ -98,21 +163,22 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
                     user_agent: None,
                     referer: None,
                     cookies: None,
-                    checksum: None,
-                    mirrors: None,
+                    checksum: parsed_checksum,
+                    mirrors: mirrors_opt,
                 })
             } else {
                 None
             };
 
-            let single = urls.len() == 1;
-            for url in urls {
+            let single = final_urls.len() == 1;
+            for url in final_urls {
                 let filename = if single { output.clone() } else { None };
                 let req = AddDownloadRequest {
                     url: url.clone(),
                     target_dir: dir.clone(),
                     filename,
                     queue: queue.clone(),
+                    category: category.clone(),
                     options: options.clone(),
                 };
 
@@ -251,6 +317,37 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
                 }
                 Ok(())
             }
+            QueueCommand::Schedule {
+                name,
+                start,
+                stop,
+                days,
+            } => {
+                let days_vec = days.map(|d| {
+                    d.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect::<Vec<String>>()
+                });
+                let q = client
+                    .update_queue_schedule(&name, &start, stop.as_deref(), days_vec.as_deref())
+                    .await?;
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&q).map_err(|e| e.to_string())?
+                    );
+                } else {
+                    println!(
+                        "Updated schedule for queue '{}': start={}, stop={:?}, days={:?}",
+                        q.name,
+                        q.schedule_start.unwrap_or_default(),
+                        q.schedule_stop,
+                        q.schedule_days.unwrap_or_default()
+                    );
+                }
+                Ok(())
+            }
             QueueCommand::Delete { name } => {
                 client.delete_queue(&name).await?;
                 if json {
@@ -260,6 +357,53 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
                     );
                 } else {
                     println!("Deleted queue '{name}'");
+                }
+                Ok(())
+            }
+        },
+
+        Command::Category(category_cmd) => match category_cmd {
+            CategoryCommand::List => {
+                let list = client.list_categories().await?;
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&list).map_err(|e| e.to_string())?
+                    );
+                } else {
+                    print_categories_table(&list);
+                }
+                Ok(())
+            }
+            CategoryCommand::Set { name, dir, exts } => {
+                let exts_vec = exts.map(|e| {
+                    e.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect::<Vec<String>>()
+                });
+                let cat = client
+                    .set_category(&name, dir.as_deref(), exts_vec.as_deref())
+                    .await?;
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&cat).map_err(|e| e.to_string())?
+                    );
+                } else {
+                    println!("Set category '{}'", cat.name);
+                }
+                Ok(())
+            }
+            CategoryCommand::Delete { name } => {
+                client.delete_category(&name).await?;
+                if json {
+                    println!(
+                        r#"{{"status":"deleted","category":{}}}"#,
+                        serde_json::to_string(&name).unwrap_or_default()
+                    );
+                } else {
+                    println!("Deleted category '{name}'");
                 }
                 Ok(())
             }

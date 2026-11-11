@@ -3,8 +3,9 @@ use std::fs;
 use std::path::PathBuf;
 
 use odm_api::{
-    AddDownloadRequest, AddDownloadResponse, CreateQueueRequest, DownloadDetailDto, ErrorResponse,
-    HealthResponse, ListDownloadsResponse, ListQueuesResponse, QueueDto, UpdateQueueRequest,
+    AddDownloadRequest, AddDownloadResponse, CategoryDto, CreateQueueRequest, DownloadDetailDto,
+    ErrorResponse, HealthResponse, ListCategoriesResponse, ListDownloadsResponse,
+    ListQueuesResponse, QueueDto, SetCategoryRequest, UpdateQueueRequest,
 };
 use reqwest::header::AUTHORIZATION;
 use reqwest::{Client, Response};
@@ -280,6 +281,95 @@ impl DaemonClient {
 
     pub async fn delete_queue(&self, name: &str) -> Result<(), String> {
         let url = format!("{}/api/v1/queues/{name}", self.server_url);
+        let mut req = self.client.delete(&url);
+        if let Some(auth) = self.auth_header() {
+            req = req.header(AUTHORIZATION, auth);
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| format!("Request failed: {e}"))?;
+
+        let status = resp.status();
+        if status.is_success() {
+            Ok(())
+        } else {
+            let bytes = resp.bytes().await.unwrap_or_default();
+            if let Ok(err) = serde_json::from_slice::<ErrorResponse>(&bytes) {
+                Err(format!("Error: {}", err.error.message))
+            } else {
+                Err(format!("HTTP Error {status}"))
+            }
+        }
+    }
+
+    pub async fn update_queue_schedule(
+        &self,
+        name: &str,
+        start: &str,
+        stop: Option<&str>,
+        days: Option<&[String]>,
+    ) -> Result<QueueDto, String> {
+        let url = format!("{}/api/v1/queues/{name}", self.server_url);
+        let mut req = self.client.patch(&url);
+        if let Some(auth) = self.auth_header() {
+            req = req.header(AUTHORIZATION, auth);
+        }
+        let body = UpdateQueueRequest {
+            max_concurrent: 3,
+            schedule_start: Some(start.to_string()),
+            schedule_stop: stop.map(|s| s.to_string()),
+            schedule_days: days.map(|d| d.to_vec()),
+        };
+        let resp = req
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("Request failed: {e}"))?;
+
+        self.handle_response(resp).await
+    }
+
+    pub async fn list_categories(&self) -> Result<ListCategoriesResponse, String> {
+        let url = format!("{}/api/v1/categories", self.server_url);
+        let mut req = self.client.get(&url);
+        if let Some(auth) = self.auth_header() {
+            req = req.header(AUTHORIZATION, auth);
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| format!("Request failed: {e}"))?;
+
+        self.handle_response(resp).await
+    }
+
+    pub async fn set_category(
+        &self,
+        name: &str,
+        dir: Option<&str>,
+        exts: Option<&[String]>,
+    ) -> Result<CategoryDto, String> {
+        let url = format!("{}/api/v1/categories/{name}", self.server_url);
+        let mut req = self.client.put(&url);
+        if let Some(auth) = self.auth_header() {
+            req = req.header(AUTHORIZATION, auth);
+        }
+        let body = SetCategoryRequest {
+            directory: dir.map(|d| d.to_string()),
+            extensions: exts.map(|e| e.to_vec()),
+        };
+        let resp = req
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("Request failed: {e}"))?;
+
+        self.handle_response(resp).await
+    }
+
+    pub async fn delete_category(&self, name: &str) -> Result<(), String> {
+        let url = format!("{}/api/v1/categories/{name}", self.server_url);
         let mut req = self.client.delete(&url);
         if let Some(auth) = self.auth_header() {
             req = req.header(AUTHORIZATION, auth);

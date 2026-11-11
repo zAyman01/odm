@@ -58,6 +58,7 @@ fn add_download_request_and_response() {
         target_dir: Some("/downloads".to_string()),
         filename: Some("custom.zip".to_string()),
         queue: Some("bulk".to_string()),
+        category: Some("Compressed".to_string()),
         options: Some(JobOptionsDto {
             segments: Some(4),
             speed_limit: Some(1024),

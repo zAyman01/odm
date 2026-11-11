@@ -33,6 +33,8 @@ pub struct AddDownloadRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queue: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub options: Option<JobOptionsDto>,
 }
 

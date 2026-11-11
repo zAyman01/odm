@@ -88,3 +88,18 @@ pub fn print_queues_table(list: &ListQueuesResponse) {
         println!("{:<6} {:<20} {:<15}", q.id, q.name, q.max_concurrent);
     }
 }
+
+pub fn print_categories_table(list: &odm_api::ListCategoriesResponse) {
+    if list.categories.is_empty() {
+        println!("No categories found.");
+        return;
+    }
+
+    println!("{:<15} {:<25} EXTENSIONS", "NAME", "DIRECTORY");
+    println!("{}", "-".repeat(60));
+
+    for c in &list.categories {
+        let exts = c.extensions.join(", ");
+        println!("{:<15} {:<25} {}", c.name, c.directory, exts);
+    }
+}
