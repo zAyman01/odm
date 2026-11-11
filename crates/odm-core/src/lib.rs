@@ -12,6 +12,7 @@ pub mod job;
 pub mod limiter;
 pub mod metalink;
 pub mod queue;
+pub mod schedule;
 pub mod segment;
 pub mod store;
 
@@ -34,5 +35,6 @@ pub use job::{
 pub use limiter::{Limiter, TokenBucket};
 pub use metalink::{MetalinkError, MetalinkSpec, parse_metalink};
 pub use queue::Queue;
+pub use schedule::{Clock, QueueSchedule, SystemClock};
 pub use segment::Segment;
 pub use store::{Store, StoreError};

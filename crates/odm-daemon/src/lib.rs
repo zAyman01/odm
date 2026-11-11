@@ -4,6 +4,7 @@
 pub mod auth;
 pub mod config;
 pub mod routes;
+pub mod scheduler;
 pub mod server;
 pub mod state;
 pub mod ws;

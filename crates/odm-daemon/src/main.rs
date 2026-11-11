@@ -31,6 +31,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db_path = config.data_dir.join("odm.sqlite");
     let store = Store::open(&db_path)?;
     let engine = Engine::new(store)?;
+    let scheduler = std::sync::Arc::new(odm_daemon::scheduler::Scheduler::new(engine.clone()));
+    let _scheduler_handle = scheduler.start();
     let state = AppState::new(engine, config.clone());
 
     let app = build_router_with_state(state);

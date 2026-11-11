@@ -87,6 +87,9 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                         id: q.id,
                         name: q.name,
                         max_concurrent: q.max_concurrent,
+                        schedule_start: q.schedule.as_ref().map(|s| s.start_time.clone()),
+                        schedule_stop: q.schedule.as_ref().and_then(|s| s.stop_time.clone()),
+                        schedule_days: q.schedule.map(|s| s.days),
                     })
                 } else {
                     continue;

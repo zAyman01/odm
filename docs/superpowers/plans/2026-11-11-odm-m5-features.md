@@ -360,14 +360,14 @@ git commit -m "feat(daemon): implement categories persistence, auto-routing and 
 **Interfaces:**
 - Produces: `QueueScheduleDto`, `QueueSchedule`, background `Scheduler` worker in `odm-daemon`.
 
-- [ ] **Step 1: Write scheduler tests first**
+- [x] **Step 1: Write scheduler tests first**
 
 `crates/odm-daemon/tests/queue_scheduler.rs`:
 - Test schedule evaluation: matches start time and active weekday.
 - Test queue auto-start when clock hits start time.
 - Test queue jobs auto-pause when clock hits stop time.
 
-- [ ] **Step 2: Implement schedule schema and models**
+- [x] **Step 2: Implement schedule schema and models**
 
 In `crates/odm-api/src/queue.rs`:
 - Extend `QueueDto`, `CreateQueueRequest`, `UpdateQueueRequest` with `schedule_start`, `schedule_stop`, `schedule_days`.
@@ -387,7 +387,7 @@ In `crates/odm-daemon/src/scheduler.rs`:
   - Matches local time `HH:MM` against `schedule_start` / `schedule_stop`.
   - Dispatches `engine.run_queue` or pauses active jobs.
 
-- [ ] **Step 3: Run scheduler tests and verify gate**
+- [x] **Step 3: Run scheduler tests and verify gate**
 
 Run:
 ```bash
@@ -398,7 +398,7 @@ cargo test --workspace
 cargo deny check
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add crates/odm-api crates/odm-core crates/odm-daemon

@@ -240,6 +240,9 @@ impl DaemonClient {
         let body = CreateQueueRequest {
             name: name.to_string(),
             max_concurrent,
+            schedule_start: None,
+            schedule_stop: None,
+            schedule_days: None,
         };
         let resp = req
             .json(&body)
@@ -260,7 +263,12 @@ impl DaemonClient {
         if let Some(auth) = self.auth_header() {
             req = req.header(AUTHORIZATION, auth);
         }
-        let body = UpdateQueueRequest { max_concurrent };
+        let body = UpdateQueueRequest {
+            max_concurrent,
+            schedule_start: None,
+            schedule_stop: None,
+            schedule_days: None,
+        };
         let resp = req
             .json(&body)
             .send()

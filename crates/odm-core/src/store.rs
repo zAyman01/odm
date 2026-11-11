@@ -65,11 +65,18 @@ INSERT INTO categories (name, directory, extensions_json) VALUES
 ALTER TABLE jobs ADD COLUMN category TEXT;
 ";
 
+const MIGRATION_5: &str = "
+ALTER TABLE queues ADD COLUMN schedule_start TEXT;
+ALTER TABLE queues ADD COLUMN schedule_stop TEXT;
+ALTER TABLE queues ADD COLUMN schedule_days TEXT;
+";
+
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, MIGRATION_1),
     (2, MIGRATION_2),
     (3, MIGRATION_3),
     (4, MIGRATION_4),
+    (5, MIGRATION_5),
 ];
 
 const MIGRATION_2: &str = "
@@ -318,30 +325,43 @@ impl Store {
 
     /// Creates a named queue.
     pub fn create_queue(&self, name: &str, max_concurrent: u32) -> Result<Queue, StoreError> {
+        self.create_queue_with_schedule(name, max_concurrent, None)
+    }
+
+    /// Creates a named queue with an optional schedule.
+    pub fn create_queue_with_schedule(
+        &self,
+        name: &str,
+        max_concurrent: u32,
+        schedule: Option<&crate::schedule::QueueSchedule>,
+    ) -> Result<Queue, StoreError> {
         let connection = self.lock()?;
+        let (start, stop, days_json) = match schedule {
+            Some(s) => {
+                let d = serde_json::to_string(&s.days).unwrap_or_else(|_| "[]".to_string());
+                (Some(s.start_time.clone()), s.stop_time.clone(), Some(d))
+            }
+            None => (None, None, None),
+        };
         connection.execute(
-            "INSERT INTO queues (name, max_concurrent) VALUES (?1, ?2)",
-            params![name, i64::from(max_concurrent)],
+            "INSERT INTO queues (name, max_concurrent, schedule_start, schedule_stop, schedule_days) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![name, i64::from(max_concurrent), start, stop, days_json],
         )?;
         Ok(Queue {
             id: connection.last_insert_rowid(),
             name: name.to_string(),
             max_concurrent,
+            schedule: schedule.cloned(),
         })
     }
 
     /// Lists every queue ordered by id.
     pub fn list_queues(&self) -> Result<Vec<Queue>, StoreError> {
         let connection = self.lock()?;
-        let mut statement =
-            connection.prepare("SELECT id, name, max_concurrent FROM queues ORDER BY id ASC")?;
-        let rows = statement.query_map([], |row| {
-            Ok(Queue {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                max_concurrent: row.get::<_, i64>(2)? as u32,
-            })
-        })?;
+        let mut statement = connection.prepare(
+            "SELECT id, name, max_concurrent, schedule_start, schedule_stop, schedule_days FROM queues ORDER BY id ASC",
+        )?;
+        let rows = statement.query_map([], db_queue_from_row)?;
 
         let mut queues = Vec::new();
         for row in rows {
@@ -355,15 +375,9 @@ impl Store {
         let connection = self.lock()?;
         let queue = connection
             .query_row(
-                "SELECT id, name, max_concurrent FROM queues WHERE name = ?1",
+                "SELECT id, name, max_concurrent, schedule_start, schedule_stop, schedule_days FROM queues WHERE name = ?1",
                 params![name],
-                |row| {
-                    Ok(Queue {
-                        id: row.get(0)?,
-                        name: row.get(1)?,
-                        max_concurrent: row.get::<_, i64>(2)? as u32,
-                    })
-                },
+                db_queue_from_row,
             )
             .optional()?;
 
@@ -381,6 +395,34 @@ impl Store {
             return Err(StoreError::QueueNotFound(id.to_string()));
         }
         Ok(())
+    }
+
+    /// Updates a queue's limit and/or schedule.
+    pub fn update_queue_schedule(
+        &self,
+        name: &str,
+        max_concurrent: Option<u32>,
+        schedule: Option<Option<crate::schedule::QueueSchedule>>,
+    ) -> Result<Queue, StoreError> {
+        let connection = self.lock()?;
+        let current = self.queue_by_name(name)?;
+        let new_max = max_concurrent.unwrap_or(current.max_concurrent);
+        let new_schedule = match schedule {
+            Some(opt) => opt,
+            None => current.schedule,
+        };
+        let (start, stop, days_json) = match &new_schedule {
+            Some(s) => {
+                let d = serde_json::to_string(&s.days).unwrap_or_else(|_| "[]".to_string());
+                (Some(s.start_time.clone()), s.stop_time.clone(), Some(d))
+            }
+            None => (None, None, None),
+        };
+        connection.execute(
+            "UPDATE queues SET max_concurrent = ?2, schedule_start = ?3, schedule_stop = ?4, schedule_days = ?5 WHERE name = ?1",
+            params![name, i64::from(new_max), start, stop, days_json],
+        )?;
+        self.queue_by_name(name)
     }
 
     /// Lists the jobs of a queue in execution order.
@@ -709,6 +751,28 @@ struct DbJob {
     created_at: i64,
     updated_at: i64,
     category: Option<String>,
+}
+
+fn db_queue_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Queue> {
+    let id = row.get(0)?;
+    let name = row.get(1)?;
+    let max_concurrent = row.get::<_, i64>(2)? as u32;
+    let schedule_start: Option<String> = row.get(3)?;
+    let schedule_stop: Option<String> = row.get(4)?;
+    let schedule_days_raw: Option<String> = row.get(5)?;
+    let schedule = schedule_start.map(|start| {
+        let days: Vec<String> = schedule_days_raw
+            .as_deref()
+            .and_then(|d| serde_json::from_str(d).ok())
+            .unwrap_or_default();
+        crate::schedule::QueueSchedule::new(start, schedule_stop, days)
+    });
+    Ok(Queue {
+        id,
+        name,
+        max_concurrent,
+        schedule,
+    })
 }
 
 fn db_job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DbJob> {

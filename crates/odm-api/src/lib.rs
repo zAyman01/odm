@@ -22,5 +22,7 @@ pub use error::{ErrorDetail, ErrorResponse};
 pub use event::{Event, WsAuthRequest, WsAuthResponse};
 pub use health::HealthResponse;
 pub use probe::{ProbeRequest, ProbeResponse};
-pub use queue::{CreateQueueRequest, ListQueuesResponse, QueueDto, UpdateQueueRequest};
+pub use queue::{
+    CreateQueueRequest, ListQueuesResponse, QueueDto, QueueScheduleDto, UpdateQueueRequest,
+};
 pub use settings::{SettingsDto, UpdateSettingsRequest};

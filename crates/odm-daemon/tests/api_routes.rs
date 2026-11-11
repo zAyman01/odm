@@ -159,6 +159,9 @@ async fn full_rest_lifecycle_test() {
     let queue_body = serde_json::to_vec(&CreateQueueRequest {
         name: "fast".to_string(),
         max_concurrent: 5,
+        schedule_start: None,
+        schedule_stop: None,
+        schedule_days: None,
     })
     .unwrap();
     let req = axum::http::Request::builder()

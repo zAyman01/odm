@@ -218,6 +218,9 @@ impl DaemonBridge {
                         let body = CreateQueueRequest {
                             name,
                             max_concurrent: concurrency,
+                            schedule_start: None,
+                            schedule_stop: None,
+                            schedule_days: None,
                         };
                         let _ = req.json(&body).send().await;
                     }

@@ -349,6 +349,7 @@ pub async fn resume_download_handler(
                     id: 1,
                     name: "default".to_string(),
                     max_concurrent: 3,
+                    schedule: None,
                 })
         });
 
@@ -391,6 +392,7 @@ pub async fn retry_download_handler(
                     id: 1,
                     name: "default".to_string(),
                     max_concurrent: 3,
+                    schedule: None,
                 })
         });
 
@@ -421,6 +423,17 @@ pub async fn delete_download_handler(
     Ok(StatusCode::OK)
 }
 
+fn queue_to_dto(q: odm_core::Queue) -> QueueDto {
+    QueueDto {
+        id: q.id,
+        name: q.name,
+        max_concurrent: q.max_concurrent,
+        schedule_start: q.schedule.as_ref().map(|s| s.start_time.clone()),
+        schedule_stop: q.schedule.as_ref().and_then(|s| s.stop_time.clone()),
+        schedule_days: q.schedule.map(|s| s.days),
+    }
+}
+
 pub async fn list_queues_handler(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
@@ -431,14 +444,7 @@ pub async fn list_queues_handler(
         )
     })?;
 
-    let dtos = queues
-        .into_iter()
-        .map(|q| QueueDto {
-            id: q.id,
-            name: q.name,
-            max_concurrent: q.max_concurrent,
-        })
-        .collect();
+    let dtos = queues.into_iter().map(queue_to_dto).collect();
 
     Ok(Json(ListQueuesResponse { queues: dtos }))
 }
@@ -447,10 +453,17 @@ pub async fn create_queue_handler(
     State(state): State<AppState>,
     Json(req): Json<CreateQueueRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    let sched = req.schedule_start.map(|start| {
+        odm_core::schedule::QueueSchedule::new(
+            start,
+            req.schedule_stop,
+            req.schedule_days.unwrap_or_default(),
+        )
+    });
     let queue = state
         .engine
         .store()
-        .create_queue(&req.name, req.max_concurrent)
+        .create_queue_with_schedule(&req.name, req.max_concurrent, sched.as_ref())
         .map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
@@ -458,11 +471,7 @@ pub async fn create_queue_handler(
             )
         })?;
 
-    Ok(Json(QueueDto {
-        id: queue.id,
-        name: queue.name,
-        max_concurrent: queue.max_concurrent,
-    }))
+    Ok(Json(queue_to_dto(queue)))
 }
 
 pub async fn update_queue_handler(
@@ -471,15 +480,20 @@ pub async fn update_queue_handler(
     Json(req): Json<UpdateQueueRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
     let store = state.engine.store();
-    let queue = store.queue_by_name(&name).map_err(|_| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse::new("not_found", "Queue not found")),
-        )
-    })?;
+    let sched_opt = if req.schedule_start.is_some() {
+        Some(req.schedule_start.map(|start| {
+            odm_core::schedule::QueueSchedule::new(
+                start,
+                req.schedule_stop,
+                req.schedule_days.unwrap_or_default(),
+            )
+        }))
+    } else {
+        None
+    };
 
-    store
-        .set_queue_limit(queue.id, req.max_concurrent)
+    let updated = store
+        .update_queue_schedule(&name, Some(req.max_concurrent), sched_opt)
         .map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
@@ -487,18 +501,7 @@ pub async fn update_queue_handler(
             )
         })?;
 
-    let updated = store.queue_by_name(&name).map_err(|_| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse::new("not_found", "Queue not found")),
-        )
-    })?;
-
-    Ok(Json(QueueDto {
-        id: updated.id,
-        name: updated.name,
-        max_concurrent: updated.max_concurrent,
-    }))
+    Ok(Json(queue_to_dto(updated)))
 }
 
 pub async fn delete_queue_handler(
