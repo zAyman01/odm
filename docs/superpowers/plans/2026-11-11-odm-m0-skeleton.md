@@ -864,22 +864,22 @@ git commit -m "docs: add contributor, security and agent guidelines"
 
 Creating a public repository is visible to everyone and is the project owner's action. The agent stops after Task 4.
 
-- [ ] **Step 1: Confirm the working tree is clean**
+- [x] **Step 1: Confirm the working tree is clean**
 
 Run: `git status --short`
 Expected: no output.
 
-- [ ] **Step 2: Create the public repository and push**
+- [x] **Step 2: Create the public repository and push**
 
 Run: `gh repo create zAyman01/odm --public --source . --remote origin --push --description "Open Download Manager: a fast, open source download manager written in Rust"`
 Expected: prints `https://github.com/zAyman01/odm` and a line showing `main` was pushed.
 
-- [ ] **Step 3: Enable private vulnerability reporting** (the contact named in `SECURITY.md` and `CODE_OF_CONDUCT.md`)
+- [x] **Step 3: Enable private vulnerability reporting** (the contact named in `SECURITY.md` and `CODE_OF_CONDUCT.md`)
 
 Run: `gh api -X PUT repos/zAyman01/odm/private-vulnerability-reporting && echo enabled`
 Expected: `enabled`
 
-- [ ] **Step 4: Wait for CI and check all four jobs**
+- [x] **Step 4: Wait for CI and check all four jobs**
 
 Run: `gh run watch --exit-status $(gh run list --workflow CI --limit 1 --json databaseId --jq '.[0].databaseId')`
 Expected: ends with success, and four jobs each marked with a check: `check (ubuntu-latest)`, `check (windows-latest)`, `check (macos-latest)`, `deny`.
