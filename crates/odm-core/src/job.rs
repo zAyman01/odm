@@ -308,11 +308,79 @@ impl Job {
         self.updated_at = now_millis();
     }
 
+    pub(crate) fn set_id(&mut self, id: JobId) {
+        self.id = id;
+    }
+
+    pub(crate) fn record(&self) -> JobRecord {
+        JobRecord {
+            id: self.id,
+            source: self.source.clone(),
+            filename: self.filename.clone(),
+            target_dir: self.target_dir.clone(),
+            state: self.state,
+            backend: self.backend,
+            total_bytes: self.total_bytes,
+            downloaded_bytes: self.downloaded_bytes,
+            supports_ranges: self.supports_ranges,
+            etag: self.etag.clone(),
+            last_modified: self.last_modified.clone(),
+            content_type: self.content_type.clone(),
+            error: self.error.clone(),
+            options: self.options.clone(),
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        }
+    }
+
     fn effective_filename(&self) -> &str {
         if self.filename.is_empty() {
             "download"
         } else {
             &self.filename
+        }
+    }
+}
+
+/// Raw field view used by the SQLite store.
+pub(crate) struct JobRecord {
+    pub id: JobId,
+    pub source: Source,
+    pub filename: String,
+    pub target_dir: PathBuf,
+    pub state: JobState,
+    pub backend: BackendKind,
+    pub total_bytes: Option<u64>,
+    pub downloaded_bytes: u64,
+    pub supports_ranges: bool,
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+    pub content_type: Option<String>,
+    pub error: Option<JobErrorInfo>,
+    pub options: JobOptions,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl Job {
+    pub(crate) fn from_record(record: JobRecord) -> Self {
+        Self {
+            id: record.id,
+            source: record.source,
+            filename: record.filename,
+            target_dir: record.target_dir,
+            state: record.state,
+            backend: record.backend,
+            total_bytes: record.total_bytes,
+            downloaded_bytes: record.downloaded_bytes,
+            supports_ranges: record.supports_ranges,
+            etag: record.etag,
+            last_modified: record.last_modified,
+            content_type: record.content_type,
+            error: record.error,
+            options: record.options,
+            created_at: record.created_at,
+            updated_at: record.updated_at,
         }
     }
 }
