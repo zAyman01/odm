@@ -526,7 +526,7 @@ git commit -m "feat(gui): integrate checksums, mirrors, batch urls and category 
 - Modify: `CHANGELOG.md`
 - Create: `tests/m5_e2e_features.rs` (or `crates/odm-daemon/tests/e2e_m5.rs`)
 
-- [ ] **Step 1: Create manual checklist in `docs/manual-checklists/m5-features.md`**
+- [x] **Step 1: Create manual checklist in `docs/manual-checklists/m5-features.md`**
 
 Document all manual verification steps:
 1. Checksum verification with matching and corrupted files.
@@ -536,7 +536,7 @@ Document all manual verification steps:
 5. Category automatic routing and custom extension mapping.
 6. Queue scheduling with automated start/stop.
 
-- [ ] **Step 2: Record M5 capabilities in CHANGELOG.md**
+- [x] **Step 2: Record M5 capabilities in CHANGELOG.md**
 
 Under `## [Unreleased]` and `### Added`:
 ```markdown
@@ -549,7 +549,7 @@ Under `## [Unreleased]` and `### Added`:
 - Full CLI and GUI controls for checksums, mirrors, categories, batch URLs, and schedules.
 ```
 
-- [ ] **Step 3: Run full milestone gate**
+- [x] **Step 3: Run full milestone gate**
 
 ```bash
 cargo fmt --all --check
@@ -560,7 +560,7 @@ cargo deny check
 
 Expected: All pass cleanly; zero clippy warnings; zero unsafe; deny checks green.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/manual-checklists/m5-features.md CHANGELOG.md docs/superpowers/plans/2026-11-11-odm-m5-features.md
