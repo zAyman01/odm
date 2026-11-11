@@ -967,6 +967,15 @@ dependencies = [
 [[package]]
 name = "odm-cli"
 version = "0.1.0"
+dependencies = [
+ "clap",
+ "directories",
+ "odm-api",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
 
 [[package]]
 name = "odm-core"
