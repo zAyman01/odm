@@ -4,6 +4,8 @@ use async_trait::async_trait;
 use tokio::sync::{mpsc, watch};
 
 use crate::job::{BackendKind, Job, JobOptions, ProbeResult, Source};
+use crate::limiter::Limiter;
+use crate::store::{Store, StoreError};
 
 /// A protocol implementation that probes sources and moves bytes.
 #[async_trait]
@@ -84,6 +86,7 @@ pub struct ProgressUpdate {
 }
 
 /// The sending half of a job's progress channel.
+#[derive(Clone)]
 pub struct ProgressSink {
     sender: mpsc::UnboundedSender<ProgressUpdate>,
 }
@@ -108,6 +111,8 @@ pub struct JobContext {
     pub job: Job,
     pub control: ControlToken,
     pub progress: ProgressSink,
+    pub store: Store,
+    pub limiter: Limiter,
 }
 
 /// Errors returned by backends.
@@ -117,6 +122,12 @@ pub enum BackendError {
     Http(#[from] reqwest::Error),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("store error: {0}")]
+    Store(#[from] StoreError),
+    #[error("server ignored the requested byte range")]
+    RangeIgnored,
+    #[error("worker task failed: {0}")]
+    Task(String),
     #[error("source is not supported by this backend")]
     Unsupported,
     #[error("unexpected http status: {0}")]
@@ -135,9 +146,13 @@ impl BackendError {
             Self::Status(status) => {
                 matches!(status.as_u16(), 408 | 429) || status.is_server_error()
             }
-            Self::Io(_) | Self::Unsupported | Self::InvalidOptions(_) | Self::InvalidUrl(_) => {
-                false
-            }
+            Self::Io(_)
+            | Self::Store(_)
+            | Self::RangeIgnored
+            | Self::Task(_)
+            | Self::Unsupported
+            | Self::InvalidOptions(_)
+            | Self::InvalidUrl(_) => false,
         }
     }
 }

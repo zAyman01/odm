@@ -12,7 +12,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use odm_core::{
     Backend, BackendKind, ControlToken, Engine, HttpBackend, Job, JobContext, JobOptions, JobState,
-    ProgressSink, RunOutcome, Source, Store,
+    Limiter, ProgressSink, RunOutcome, Source, Store, TokenBucket,
 };
 use tempfile::TempDir;
 use tokio::net::TcpListener;
@@ -203,6 +203,8 @@ async fn single_stream_download_writes_file_and_reports_progress() {
         job: job.clone(),
         control,
         progress,
+        store: Store::open_in_memory().unwrap(),
+        limiter: Limiter::new(Arc::new(TokenBucket::new(0)), None),
     };
 
     let outcome = backend.run(context).await.unwrap();

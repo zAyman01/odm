@@ -1,18 +1,21 @@
 //! Job orchestration: add, probe, download and persist.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use url::Url;
 
 use crate::backend::{Backend, BackendError, ControlToken, JobContext, ProgressSink, RunOutcome};
 use crate::http::HttpBackend;
 use crate::job::{BackendKind, Job, JobId, JobOptions, JobState, Source, TransitionError};
+use crate::limiter::{Limiter, TokenBucket};
 use crate::store::{Store, StoreError};
 
 /// Coordinates probing, downloading and persisting one job at a time.
 pub struct Engine {
     store: Store,
     backend: HttpBackend,
+    limiter: Arc<TokenBucket>,
 }
 
 impl Engine {
@@ -20,6 +23,7 @@ impl Engine {
         Ok(Self {
             store,
             backend: HttpBackend::new()?,
+            limiter: Arc::new(TokenBucket::unlimited()),
         })
     }
 
@@ -78,6 +82,8 @@ impl Engine {
             job: job.clone(),
             control,
             progress,
+            store: self.store.clone(),
+            limiter: Limiter::new(self.limiter.clone(), job.options().speed_limit),
         };
 
         let outcome = match self.backend.run(context).await {
