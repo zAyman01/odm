@@ -120,7 +120,7 @@ Expected: two version lines, the first starting with `rustup 1.`, the second wit
 - Consumes: Rust toolchain from Task 0.
 - Produces: eight buildable crates that later milestones fill in; the commands `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` all passing; binaries that print `<binary name> 0.1.0`.
 
-- [ ] **Step 1: Create the root configuration files**
+- [x] **Step 1: Create the root configuration files**
 
 `Cargo.toml`:
 
@@ -169,17 +169,17 @@ allow-expect-in-tests = true
 * text=auto eol=lf
 ```
 
-- [ ] **Step 2: Install the pinned toolchain**
+- [x] **Step 2: Install the pinned toolchain**
 
 Run: `rustup toolchain install`
 Expected: output mentions `1.99.1` and ends without an error.
 
-- [ ] **Step 3: Verify the pin is active**
+- [x] **Step 3: Verify the pin is active**
 
 Run: `rustc --version`
 Expected: starts with `rustc 1.99.1`.
 
-- [ ] **Step 4: Create `odm-core` WITHOUT the guard rails, and write the guard test**
+- [x] **Step 4: Create `odm-core` WITHOUT the guard rails, and write the guard test**
 
 The guard rails are left out on purpose so the test can be seen failing first.
 
@@ -257,12 +257,12 @@ fn every_crate_root_forbids_unsafe_code() {
 }
 ```
 
-- [ ] **Step 5: Run the guard test and watch it fail**
+- [x] **Step 5: Run the guard test and watch it fail**
 
 Run: `cargo test -p odm-core --test workspace_guard`
 Expected: `test result: FAILED. 0 passed; 2 failed`. The messages contain `must contain \`[lints]\`` and `must contain \`#![forbid(unsafe_code)]\``.
 
-- [ ] **Step 6: Add the guard rails to `odm-core`**
+- [x] **Step 6: Add the guard rails to `odm-core`**
 
 Append to `crates/odm-core/Cargo.toml` (after a blank line):
 
@@ -278,7 +278,7 @@ Replace `crates/odm-core/src/lib.rs` with:
 #![forbid(unsafe_code)]
 ```
 
-- [ ] **Step 7: Create the other seven crates**
+- [x] **Step 7: Create the other seven crates**
 
 Every `Cargo.toml` below uses this template, with `NAME` and `DESCRIPTION` replaced from the table:
 
@@ -332,7 +332,7 @@ fn main() {
 }
 ```
 
-- [ ] **Step 8: Run all checks and watch them pass**
+- [x] **Step 8: Run all checks and watch them pass**
 
 Run: `cargo fmt --all --check`
 Expected: no output, exit code 0. If it prints a diff instead, run `cargo fmt --all` once and run the check again; formatting is the one thing you may fix this way.
@@ -355,7 +355,7 @@ odm-gui 0.1.0
 Run: `cargo metadata --no-deps --format-version 1 | grep -o '"name":"odm-[a-z]*"' | sort -u | wc -l`
 Expected: `8`
 
-- [ ] **Step 9: Commit, then prove the lints really fire**
+- [x] **Step 9: Commit, then prove the lints really fire**
 
 ```bash
 git add Cargo.toml Cargo.lock rust-toolchain.toml clippy.toml .gitignore .gitattributes crates
@@ -396,7 +396,7 @@ Undo it and confirm nothing is left behind:
 Run: `git restore crates/odm-core/src/lib.rs && git status --short`
 Expected: no output.
 
-- [ ] **Step 10: Verify line endings**
+- [x] **Step 10: Verify line endings**
 
 Run: `git ls-files --eol | grep -v "i/lf" | wc -l`
 Expected: `0`
