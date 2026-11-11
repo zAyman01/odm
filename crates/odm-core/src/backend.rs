@@ -35,6 +35,7 @@ pub enum ControlCommand {
 }
 
 /// The sending half of a job's control channel.
+#[derive(Clone)]
 pub struct ControlHandle {
     sender: watch::Sender<ControlCommand>,
 }
