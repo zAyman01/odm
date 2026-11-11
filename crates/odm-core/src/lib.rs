@@ -5,6 +5,7 @@ pub mod backend;
 pub mod engine;
 pub mod http;
 pub mod job;
+pub mod limiter;
 pub mod queue;
 pub mod segment;
 pub mod store;
@@ -21,6 +22,7 @@ pub use job::{
     BackendKind, Job, JobErrorInfo, JobId, JobOptions, JobState, ProbeResult, Source,
     TransitionError,
 };
+pub use limiter::{Limiter, TokenBucket};
 pub use queue::Queue;
 pub use segment::Segment;
 pub use store::{Store, StoreError};

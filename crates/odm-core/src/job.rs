@@ -118,11 +118,14 @@ pub enum BackendKind {
 
 /// Per-job request options.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct JobOptions {
     pub headers: Vec<(String, String)>,
     pub user_agent: Option<String>,
     pub referer: Option<String>,
     pub cookies: Option<String>,
+    pub segments: Option<u32>,
+    pub speed_limit: Option<u64>,
 }
 
 /// Metadata discovered before or while downloading.

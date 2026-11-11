@@ -15,6 +15,7 @@ fn sample_job(target_dir: &Path) -> Job {
             user_agent: Some("odm-test".to_string()),
             referer: None,
             cookies: None,
+            ..JobOptions::default()
         },
     )
 }
