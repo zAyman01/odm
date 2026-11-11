@@ -76,7 +76,7 @@ CONTRIBUTING.md  CODE_OF_CONDUCT.md  SECURITY.md  AGENTS.md
 
 This machine has no Rust and no C++ build tools. Both installers ask for administrator approval, so the project owner runs this task.
 
-- [ ] **Step 1: Install the Microsoft C++ build tools** (Rust on Windows needs their linker)
+- [x] **Step 1: Install the Microsoft C++ build tools** (Rust on Windows needs their linker)
 
 Run in a terminal:
 
@@ -86,7 +86,7 @@ winget install --id Microsoft.VisualStudio.2022.BuildTools --override "--passive
 
 Expected: ends with `Successfully installed`. Takes several minutes.
 
-- [ ] **Step 2: Install rustup**
+- [x] **Step 2: Install rustup**
 
 ```
 winget install --id Rustlang.Rustup
@@ -94,7 +94,7 @@ winget install --id Rustlang.Rustup
 
 Expected: ends with `Successfully installed`.
 
-- [ ] **Step 3: Verify in a new Git Bash window**
+- [x] **Step 3: Verify in a new Git Bash window**
 
 Run: `rustup --version && cargo --version`
 Expected: two version lines, the first starting with `rustup 1.`, the second with `cargo 1.`. If either says `command not found`, close every terminal, open a new one, and try again.
