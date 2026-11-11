@@ -21,11 +21,11 @@ fn schema_version_is_two_and_idempotent() {
 
     {
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 2);
+        assert!(store.schema_version().unwrap() >= 2);
     }
     {
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 2);
+        assert!(store.schema_version().unwrap() >= 2);
     }
 }
 

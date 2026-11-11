@@ -3,6 +3,7 @@
 
 pub mod backend;
 pub mod engine;
+pub mod event;
 pub mod http;
 pub mod job;
 pub mod limiter;
@@ -17,6 +18,7 @@ pub use backend::{
     ProgressUpdate, RunOutcome,
 };
 pub use engine::{Engine, EngineError};
+pub use event::Event;
 pub use http::HttpBackend;
 pub use job::{
     BackendKind, Job, JobErrorInfo, JobId, JobOptions, JobState, ProbeResult, Source,

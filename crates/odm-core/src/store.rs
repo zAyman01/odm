@@ -41,7 +41,14 @@ CREATE TABLE jobs (
 CREATE INDEX idx_jobs_state ON jobs(state);
 ";
 
-const MIGRATIONS: &[(i64, &str)] = &[(1, MIGRATION_1), (2, MIGRATION_2)];
+const MIGRATION_3: &str = "
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+";
+
+const MIGRATIONS: &[(i64, &str)] = &[(1, MIGRATION_1), (2, MIGRATION_2), (3, MIGRATION_3)];
 
 const MIGRATION_2: &str = "
 CREATE TABLE queues (
@@ -391,6 +398,52 @@ impl Store {
         Ok(changed)
     }
 
+    /// Returns the value of a persisted setting by key.
+    pub fn get_setting(&self, key: &str) -> Result<Option<String>, StoreError> {
+        let connection = self.lock()?;
+        let mut statement = connection.prepare("SELECT value FROM settings WHERE key = ?1")?;
+        let mut rows = statement.query(params![key])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Sets or updates a persisted setting.
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<(), StoreError> {
+        let connection = self.lock()?;
+        connection.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    /// Deletes a job and its segments from the database.
+    pub fn delete_job(&self, id: JobId) -> Result<(), StoreError> {
+        let connection = self.lock()?;
+        let affected = connection.execute("DELETE FROM jobs WHERE id = ?1", params![id.0])?;
+        if affected == 0 {
+            return Err(StoreError::JobNotFound(id));
+        }
+        Ok(())
+    }
+
+    /// Deletes a named queue if it is not the default queue.
+    pub fn delete_queue(&self, name: &str) -> Result<(), StoreError> {
+        if name == "default" {
+            return Err(StoreError::CannotDeleteDefaultQueue);
+        }
+        let connection = self.lock()?;
+        let affected = connection.execute("DELETE FROM queues WHERE name = ?1", params![name])?;
+        if affected == 0 {
+            return Err(StoreError::QueueNotFound(name.to_string()));
+        }
+        Ok(())
+    }
+
     fn from_connection(connection: Connection) -> Result<Self, StoreError> {
         connection.pragma_update(None, "foreign_keys", true)?;
         connection.pragma_update(None, "busy_timeout", 5000_i64)?;
@@ -441,6 +494,8 @@ pub enum StoreError {
     JobNotFound(JobId),
     #[error("queue not found: {0}")]
     QueueNotFound(String),
+    #[error("cannot delete default queue")]
+    CannotDeleteDefaultQueue,
     #[error("store lock poisoned")]
     LockPoisoned,
     #[error("json error: {0}")]
