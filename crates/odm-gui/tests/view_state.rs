@@ -17,6 +17,7 @@ fn sample_item(id: i64, state: &str, queue: &str) -> DownloadItemDto {
         speed_bps: 128 * 1024,
         queue: queue.to_string(),
         target_dir: "C:\\Downloads".to_string(),
+        category: None,
         error: None,
     }
 }

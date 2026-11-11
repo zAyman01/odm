@@ -167,6 +167,7 @@ pub struct Job {
     last_modified: Option<String>,
     content_type: Option<String>,
     error: Option<JobErrorInfo>,
+    category: Option<String>,
     options: JobOptions,
     created_at: i64,
     updated_at: i64,
@@ -192,6 +193,7 @@ impl Job {
             last_modified: None,
             content_type: None,
             error: None,
+            category: None,
             options,
             created_at: now,
             updated_at: now,
@@ -256,6 +258,15 @@ impl Job {
 
     pub fn error(&self) -> Option<&JobErrorInfo> {
         self.error.as_ref()
+    }
+
+    pub fn category(&self) -> Option<&str> {
+        self.category.as_deref()
+    }
+
+    pub fn set_category(&mut self, cat: Option<String>) {
+        self.category = cat;
+        self.updated_at = now_millis();
     }
 
     pub fn options(&self) -> &JobOptions {
@@ -361,6 +372,7 @@ impl Job {
             last_modified: self.last_modified.clone(),
             content_type: self.content_type.clone(),
             error: self.error.clone(),
+            category: self.category.clone(),
             options: self.options.clone(),
             created_at: self.created_at,
             updated_at: self.updated_at,
@@ -393,6 +405,7 @@ pub(crate) struct JobRecord {
     pub last_modified: Option<String>,
     pub content_type: Option<String>,
     pub error: Option<JobErrorInfo>,
+    pub category: Option<String>,
     pub options: JobOptions,
     pub created_at: i64,
     pub updated_at: i64,
@@ -416,6 +429,7 @@ impl Job {
             last_modified: record.last_modified,
             content_type: record.content_type,
             error: record.error,
+            category: record.category,
             options: record.options,
             created_at: record.created_at,
             updated_at: record.updated_at,

@@ -87,6 +87,7 @@ fn download_item_dto_and_list() {
         speed_bps: 10240,
         queue: "default".to_string(),
         target_dir: "/tmp".to_string(),
+        category: None,
         error: None,
     };
     let list = ListDownloadsResponse {

@@ -42,6 +42,7 @@ fn full_gui_lifecycle_flow() {
         speed_bps: 0,
         queue: "default".to_string(),
         target_dir: "C:\\Downloads".to_string(),
+        category: None,
         error: None,
     };
     state.apply_event(GuiEvent::EngineEvent(Event::JobAdded(item)));

@@ -10,7 +10,7 @@ fn migration_3_creates_settings_and_persists_values() {
     let path = dir.path().join("test.sqlite");
     let store = Store::open(&path).unwrap();
 
-    assert_eq!(store.schema_version().unwrap(), 3);
+    assert!(store.schema_version().unwrap() >= 3);
     assert_eq!(store.get_setting("download_dir").unwrap(), None);
 
     store.set_setting("download_dir", "/downloads").unwrap();

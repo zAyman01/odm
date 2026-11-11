@@ -48,7 +48,29 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 ";
 
-const MIGRATIONS: &[(i64, &str)] = &[(1, MIGRATION_1), (2, MIGRATION_2), (3, MIGRATION_3)];
+const MIGRATION_4: &str = "
+CREATE TABLE categories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    directory TEXT NOT NULL,
+    extensions_json TEXT NOT NULL
+);
+INSERT INTO categories (name, directory, extensions_json) VALUES
+('Compressed', '', '[\"zip\",\"rar\",\"7z\",\"tar\",\"gz\",\"bz2\",\"xz\"]'),
+('Documents', '', '[\"pdf\",\"doc\",\"docx\",\"txt\",\"rtf\",\"odt\",\"epub\"]'),
+('Music', '', '[\"mp3\",\"flac\",\"wav\",\"m4a\",\"aac\",\"ogg\"]'),
+('Video', '', '[\"mp4\",\"mkv\",\"avi\",\"mov\",\"wmv\",\"webm\"]'),
+('Programs', '', '[\"exe\",\"msi\",\"dmg\",\"pkg\",\"deb\",\"rpm\",\"appimage\",\"iso\"]'),
+('Other', '', '[]');
+ALTER TABLE jobs ADD COLUMN category TEXT;
+";
+
+const MIGRATIONS: &[(i64, &str)] = &[
+    (1, MIGRATION_1),
+    (2, MIGRATION_2),
+    (3, MIGRATION_3),
+    (4, MIGRATION_4),
+];
 
 const MIGRATION_2: &str = "
 CREATE TABLE queues (
@@ -73,7 +95,7 @@ CREATE TABLE segments (
 const JOB_COLUMNS: &str = "
 id, source_json, filename, target_dir, state, queue_id, position, backend, total_bytes,
 downloaded_bytes, supports_ranges, etag, last_modified, content_type, error_message,
-error_retryable, options_json, created_at, updated_at
+error_retryable, options_json, created_at, updated_at, category
 ";
 
 /// A SQLite-backed job repository.
@@ -132,8 +154,8 @@ impl Store {
             "INSERT INTO jobs (
                 source_json, filename, target_dir, state, queue_id, position, backend,
                 total_bytes, downloaded_bytes, supports_ranges, etag, last_modified, content_type,
-                error_message, error_retryable, options_json, created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                error_message, error_retryable, options_json, created_at, updated_at, category
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             params![
                 source_json,
                 record.filename,
@@ -153,6 +175,7 @@ impl Store {
                 options_json,
                 record.created_at,
                 record.updated_at,
+                record.category,
             ],
         )?;
 
@@ -193,7 +216,7 @@ impl Store {
                 position = ?7, backend = ?8, total_bytes = ?9, downloaded_bytes = ?10,
                 supports_ranges = ?11, etag = ?12, last_modified = ?13, content_type = ?14,
                 error_message = ?15, error_retryable = ?16, options_json = ?17,
-                created_at = ?18, updated_at = ?19
+                created_at = ?18, updated_at = ?19, category = ?20
             WHERE id = ?1",
             params![
                 record.id.0,
@@ -215,6 +238,7 @@ impl Store {
                 options_json,
                 record.created_at,
                 record.updated_at,
+                record.category,
             ],
         )?;
 
@@ -444,6 +468,158 @@ impl Store {
         Ok(())
     }
 
+    /// Lists all categories.
+    pub fn list_categories(&self) -> Result<Vec<crate::category::Category>, StoreError> {
+        let connection = self.lock()?;
+        let mut stmt = connection.prepare(
+            "SELECT id, name, directory, extensions_json FROM categories ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let id: i64 = row.get(0)?;
+            let name: String = row.get(1)?;
+            let directory: String = row.get(2)?;
+            let exts_json: String = row.get(3)?;
+            Ok((id, name, directory, exts_json))
+        })?;
+
+        let mut categories = Vec::new();
+        for item in rows {
+            let (id, name, directory, exts_json) = item?;
+            let extensions: Vec<String> = serde_json::from_str(&exts_json).unwrap_or_default();
+            categories.push(crate::category::Category {
+                id,
+                name,
+                directory,
+                extensions,
+            });
+        }
+        Ok(categories)
+    }
+
+    /// Gets a category by name.
+    pub fn get_category(&self, name: &str) -> Result<crate::category::Category, StoreError> {
+        let connection = self.lock()?;
+        let mut stmt = connection.prepare(
+            "SELECT id, name, directory, extensions_json FROM categories WHERE name = ?1",
+        )?;
+        let row = stmt
+            .query_row(params![name], |row| {
+                let id: i64 = row.get(0)?;
+                let name: String = row.get(1)?;
+                let directory: String = row.get(2)?;
+                let exts_json: String = row.get(3)?;
+                Ok((id, name, directory, exts_json))
+            })
+            .optional()?;
+
+        match row {
+            Some((id, name, directory, exts_json)) => {
+                let extensions: Vec<String> = serde_json::from_str(&exts_json).unwrap_or_default();
+                Ok(crate::category::Category {
+                    id,
+                    name,
+                    directory,
+                    extensions,
+                })
+            }
+            None => Err(StoreError::CategoryNotFound(name.to_string())),
+        }
+    }
+
+    /// Creates or updates a category.
+    pub fn set_category(
+        &self,
+        name: &str,
+        directory: Option<&str>,
+        extensions: Option<&[String]>,
+    ) -> Result<crate::category::Category, StoreError> {
+        let mut connection = self.lock()?;
+        let tx = connection.transaction()?;
+
+        let existing: Option<(i64, String, String)> = tx
+            .query_row(
+                "SELECT id, directory, extensions_json FROM categories WHERE name = ?1",
+                params![name],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+
+        let (id, dir, exts) = match existing {
+            Some((id, curr_dir, curr_exts_json)) => {
+                let new_dir = directory.unwrap_or(&curr_dir);
+                let new_exts_json = match extensions {
+                    Some(exts) => serde_json::to_string(exts)?,
+                    None => curr_exts_json,
+                };
+                tx.execute(
+                    "UPDATE categories SET directory = ?1, extensions_json = ?2 WHERE id = ?3",
+                    params![new_dir, new_exts_json, id],
+                )?;
+                (id, new_dir.to_string(), new_exts_json)
+            }
+            None => {
+                let dir_str = directory.unwrap_or("");
+                let exts_vec: Vec<String> = extensions.map(|e| e.to_vec()).unwrap_or_default();
+                let exts_json = serde_json::to_string(&exts_vec)?;
+                tx.execute(
+                    "INSERT INTO categories (name, directory, extensions_json) VALUES (?1, ?2, ?3)",
+                    params![name, dir_str, exts_json],
+                )?;
+                let id = tx.last_insert_rowid();
+                (id, dir_str.to_string(), exts_json)
+            }
+        };
+
+        tx.commit()?;
+        let extensions: Vec<String> = serde_json::from_str(&exts).unwrap_or_default();
+        Ok(crate::category::Category {
+            id,
+            name: name.to_string(),
+            directory: dir,
+            extensions,
+        })
+    }
+
+    /// Deletes a category by name, refusing default categories.
+    pub fn delete_category(&self, name: &str) -> Result<(), StoreError> {
+        const DEFAULT_CATEGORIES: &[&str] = &[
+            "Compressed",
+            "Documents",
+            "Music",
+            "Video",
+            "Programs",
+            "Other",
+        ];
+        if DEFAULT_CATEGORIES.contains(&name) {
+            return Err(StoreError::CannotDeleteDefaultCategory(name.to_string()));
+        }
+
+        let connection = self.lock()?;
+        let affected =
+            connection.execute("DELETE FROM categories WHERE name = ?1", params![name])?;
+        if affected == 0 {
+            return Err(StoreError::CategoryNotFound(name.to_string()));
+        }
+        Ok(())
+    }
+
+    /// Automatically finds the matching category for a given filename.
+    pub fn category_for_filename(
+        &self,
+        filename: &str,
+    ) -> Result<crate::category::Category, StoreError> {
+        let categories = self.list_categories()?;
+        for cat in &categories {
+            if cat.name != "Other" && cat.matches_filename(filename) {
+                return Ok(cat.clone());
+            }
+        }
+        if let Some(other) = categories.iter().find(|c| c.name == "Other") {
+            return Ok(other.clone());
+        }
+        Err(StoreError::CategoryNotFound("Other".to_string()))
+    }
+
     fn from_connection(connection: Connection) -> Result<Self, StoreError> {
         connection.pragma_update(None, "foreign_keys", true)?;
         connection.pragma_update(None, "busy_timeout", 5000_i64)?;
@@ -496,6 +672,10 @@ pub enum StoreError {
     QueueNotFound(String),
     #[error("cannot delete default queue")]
     CannotDeleteDefaultQueue,
+    #[error("category not found: {0}")]
+    CategoryNotFound(String),
+    #[error("cannot delete default category: {0}")]
+    CannotDeleteDefaultCategory(String),
     #[error("store lock poisoned")]
     LockPoisoned,
     #[error("json error: {0}")]
@@ -528,6 +708,7 @@ struct DbJob {
     options_json: String,
     created_at: i64,
     updated_at: i64,
+    category: Option<String>,
 }
 
 fn db_job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DbJob> {
@@ -551,6 +732,7 @@ fn db_job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DbJob> {
         options_json: row.get(16)?,
         created_at: row.get(17)?,
         updated_at: row.get(18)?,
+        category: row.get(19)?,
     })
 }
 
@@ -580,6 +762,7 @@ fn to_job(row: DbJob) -> Result<Job, StoreError> {
         last_modified: row.last_modified,
         content_type: row.content_type,
         error,
+        category: row.category,
         options,
         created_at: row.created_at,
         updated_at: row.updated_at,

@@ -37,6 +37,11 @@ pub fn build_router_with_state(state: AppState) -> Router {
             "/queues/{name}",
             axum::routing::patch(update_queue_handler).delete(delete_queue_handler),
         )
+        .route("/categories", get(list_categories_handler))
+        .route(
+            "/categories/{name}",
+            axum::routing::put(set_category_handler).delete(delete_category_handler),
+        )
         .route(
             "/settings",
             get(get_settings_handler).patch(update_settings_handler),

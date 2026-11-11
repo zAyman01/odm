@@ -288,7 +288,7 @@ git commit -m "feat(core): implement metalink parsing and multi-mirror failover"
 **Interfaces:**
 - Produces: `CategoryDto`, `SetCategoryRequest`, `ListCategoriesResponse`, SQLite migration 4 (`categories`), REST routes `/api/v1/categories`.
 
-- [ ] **Step 1: Write category persistence and API tests first**
+- [x] **Step 1: Write category persistence and API tests first**
 
 `crates/odm-core/tests/categories.rs`:
 - Verifies migration 4 seeds default categories.
@@ -301,7 +301,7 @@ git commit -m "feat(core): implement metalink parsing and multi-mirror failover"
 - Verifies `PUT /api/v1/categories/{name}` updates or creates.
 - Verifies `DELETE /api/v1/categories/{name}` deletes non-default.
 
-- [ ] **Step 2: Implement category models and migration 4**
+- [x] **Step 2: Implement category models and migration 4**
 
 In `crates/odm-api/src/category.rs`:
 - Define `CategoryDto`, `SetCategoryRequest`, `ListCategoriesResponse`.
@@ -323,7 +323,7 @@ In `crates/odm-core/src/store.rs`:
 In `crates/odm-daemon/src/routes/categories.rs`:
 - Implement Axum handlers: `list_categories`, `set_category`, `delete_category`.
 
-- [ ] **Step 3: Run category tests and verify gate**
+- [x] **Step 3: Run category tests and verify gate**
 
 Run:
 ```bash
@@ -335,7 +335,7 @@ cargo test --workspace
 cargo deny check
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add crates/odm-api crates/odm-core crates/odm-daemon

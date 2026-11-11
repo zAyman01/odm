@@ -6,10 +6,11 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use odm_api::{
-    AddDownloadRequest, AddDownloadResponse, ChecksumDto, CreateQueueRequest, DownloadDetailDto,
-    DownloadItemDto, ErrorResponse, HealthResponse, JobOptionsDto, ListDownloadsResponse,
-    ListQueuesResponse, ProbeRequest, ProbeResponse, QueueDto, SegmentDto, SettingsDto,
-    UpdateQueueRequest, UpdateSettingsRequest,
+    AddDownloadRequest, AddDownloadResponse, CategoryDto, ChecksumDto, CreateQueueRequest,
+    DownloadDetailDto, DownloadItemDto, ErrorResponse, HealthResponse, JobOptionsDto,
+    ListCategoriesResponse, ListDownloadsResponse, ListQueuesResponse, ProbeRequest, ProbeResponse,
+    QueueDto, SegmentDto, SetCategoryRequest, SettingsDto, UpdateQueueRequest,
+    UpdateSettingsRequest,
 };
 use odm_core::{Backend, HttpBackend, Job, JobId, JobOptions, Source, Store};
 use serde::Deserialize;
@@ -46,6 +47,7 @@ pub fn job_to_dto(job: &Job, store: &Store) -> DownloadItemDto {
         speed_bps: 0,
         queue: queue_name,
         target_dir: job.target_dir().to_string_lossy().to_string(),
+        category: job.category().map(|s| s.to_string()),
         error: job.error().map(|e| e.message.clone()),
     }
 }
@@ -140,6 +142,7 @@ pub async fn probe_handler(
 pub struct ListFilter {
     pub state: Option<String>,
     pub queue: Option<String>,
+    pub category: Option<String>,
 }
 
 pub async fn list_downloads_handler(
@@ -168,6 +171,11 @@ pub async fn list_downloads_handler(
             {
                 return false;
             }
+            if let Some(ref cat) = filter.category
+                && dto.category.as_ref() != Some(cat)
+            {
+                return false;
+            }
             true
         })
         .collect();
@@ -181,14 +189,45 @@ pub async fn add_download_handler(
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
     let store = state.engine.store();
 
-    let target_dir = if let Some(dir) = req.target_dir {
-        PathBuf::from(dir)
-    } else if let Ok(Some(d)) = store.get_setting("download_dir") {
-        PathBuf::from(d)
+    let (target_dir, category_name) = if let Some(dir) = req.target_dir {
+        (PathBuf::from(dir), None)
     } else {
-        directories::UserDirs::new()
-            .and_then(|u| u.download_dir().map(|p| p.to_path_buf()))
-            .unwrap_or_else(|| PathBuf::from("./downloads"))
+        let candidate_filename = req
+            .filename
+            .as_deref()
+            .or_else(|| req.url.rsplit_once('/').map(|(_, f)| f))
+            .unwrap_or("");
+        let cat = store.category_for_filename(candidate_filename).ok();
+        let cat_name = cat.as_ref().map(|c| c.name.clone());
+        let cat_dir = cat.and_then(|c| {
+            if c.directory.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(c.directory))
+            }
+        });
+
+        let base_dir = if let Ok(Some(d)) = store.get_setting("download_dir") {
+            PathBuf::from(d)
+        } else {
+            directories::UserDirs::new()
+                .and_then(|u| u.download_dir().map(|p| p.to_path_buf()))
+                .unwrap_or_else(|| PathBuf::from("./downloads"))
+        };
+
+        let dir = match cat_dir {
+            Some(cd) => cd,
+            None => {
+                if let Some(ref cn) = cat_name
+                    && cn != "Other"
+                {
+                    base_dir.join(cn)
+                } else {
+                    base_dir
+                }
+            }
+        };
+        (dir, cat_name)
     };
 
     let mut options = JobOptions::default();
@@ -247,6 +286,9 @@ pub async fn add_download_handler(
 
     if let Some(fname) = req.filename {
         job.set_filename(fname);
+    }
+    if let Some(cat) = category_name {
+        job.set_category(Some(cat));
     }
     job.set_queue_id(queue.id);
     let _ = store.update_job(&job);
@@ -523,4 +565,63 @@ pub async fn update_settings_handler(
     }
 
     get_settings_handler(State(state)).await
+}
+
+pub async fn list_categories_handler(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    let categories = state.engine.store().list_categories().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse::new("store_error", e.to_string())),
+        )
+    })?;
+
+    let dtos: Vec<CategoryDto> = categories
+        .into_iter()
+        .map(|c| CategoryDto {
+            name: c.name,
+            directory: c.directory,
+            extensions: c.extensions,
+        })
+        .collect();
+
+    Ok(Json(ListCategoriesResponse { categories: dtos }))
+}
+
+pub async fn set_category_handler(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(req): Json<SetCategoryRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    let cat = state
+        .engine
+        .store()
+        .set_category(&name, req.directory.as_deref(), req.extensions.as_deref())
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse::new("store_error", e.to_string())),
+            )
+        })?;
+
+    Ok(Json(CategoryDto {
+        name: cat.name,
+        directory: cat.directory,
+        extensions: cat.extensions,
+    }))
+}
+
+pub async fn delete_category_handler(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    state.engine.store().delete_category(&name).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::new("delete_category_failed", e.to_string())),
+        )
+    })?;
+
+    Ok(StatusCode::OK)
 }

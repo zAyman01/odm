@@ -44,6 +44,7 @@ async fn bridge_connects_syncs_downloads_and_forwards_events() {
                         speed_bps: 100,
                         queue: "default".to_string(),
                         target_dir: "/tmp".to_string(),
+                        category: None,
                         error: None,
                     }],
                 })

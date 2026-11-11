@@ -1,6 +1,7 @@
 //! Request, response and event types shared by the odm daemon and its clients.
 #![forbid(unsafe_code)]
 
+pub mod category;
 pub mod checksum;
 pub mod download;
 pub mod error;
@@ -10,6 +11,7 @@ pub mod probe;
 pub mod queue;
 pub mod settings;
 
+pub use category::{CategoryDto, ListCategoriesResponse, SetCategoryRequest};
 pub use checksum::{ChecksumAlgorithm, ChecksumDto, ParseChecksumError};
 
 pub use download::{

@@ -3,6 +3,7 @@
 
 pub mod backend;
 pub mod batch;
+pub mod category;
 pub mod checksum;
 pub mod engine;
 pub mod event;
@@ -21,6 +22,7 @@ pub use backend::{
     ProgressUpdate, RunOutcome,
 };
 pub use batch::{BatchError, expand_batch_url};
+pub use category::Category;
 pub use checksum::{Checksum, ChecksumAlgorithm, ChecksumError, verify_file_checksum};
 pub use engine::{Engine, EngineError};
 pub use event::Event;
