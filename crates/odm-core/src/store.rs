@@ -1,12 +1,14 @@
 //! SQLite persistence for jobs.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::from_str;
 
 use crate::job::{BackendKind, Job, JobErrorInfo, JobId, JobOptions, JobRecord, JobState, Source};
+use crate::queue::Queue;
+use crate::segment::Segment;
 use crate::util::now_millis;
 
 const SCHEMA_MIGRATIONS: &str = "
@@ -39,17 +41,38 @@ CREATE TABLE jobs (
 CREATE INDEX idx_jobs_state ON jobs(state);
 ";
 
-const MIGRATIONS: &[(i64, &str)] = &[(1, MIGRATION_1)];
+const MIGRATIONS: &[(i64, &str)] = &[(1, MIGRATION_1), (2, MIGRATION_2)];
+
+const MIGRATION_2: &str = "
+CREATE TABLE queues (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    max_concurrent INTEGER NOT NULL DEFAULT 3
+);
+INSERT INTO queues (id, name, max_concurrent) VALUES (1, 'default', 3);
+ALTER TABLE jobs ADD COLUMN queue_id INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE jobs ADD COLUMN position INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX idx_jobs_queue ON jobs(queue_id, position);
+CREATE TABLE segments (
+    job_id INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    idx INTEGER NOT NULL,
+    start INTEGER NOT NULL,
+    \"end\" INTEGER NOT NULL,
+    downloaded INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (job_id, idx)
+);
+";
 
 const JOB_COLUMNS: &str = "
-id, source_json, filename, target_dir, state, backend, total_bytes, downloaded_bytes,
-supports_ranges, etag, last_modified, content_type, error_message, error_retryable,
-options_json, created_at, updated_at
+id, source_json, filename, target_dir, state, queue_id, position, backend, total_bytes,
+downloaded_bytes, supports_ranges, etag, last_modified, content_type, error_message,
+error_retryable, options_json, created_at, updated_at
 ";
 
 /// A SQLite-backed job repository.
+#[derive(Clone)]
 pub struct Store {
-    connection: Mutex<Connection>,
+    connection: Arc<Mutex<Connection>>,
 }
 
 impl Store {
@@ -84,25 +107,33 @@ impl Store {
         Ok(version)
     }
 
-    /// Inserts a job and assigns its generated id.
+    /// Inserts a job and assigns its generated id and queue position.
     pub fn insert_job(&self, job: &mut Job) -> Result<(), StoreError> {
         let record = job.record();
         let source_json = serde_json::to_string(&record.source)?;
         let options_json = serde_json::to_string(&record.options)?;
         let (error_message, error_retryable) = error_columns(record.error.as_ref());
 
-        let connection = self.lock()?;
-        connection.execute(
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction()?;
+        let position: i64 = transaction.query_row(
+            "SELECT COALESCE(MAX(position), 0) + 1 FROM jobs WHERE queue_id = ?1",
+            params![record.queue_id],
+            |row| row.get(0),
+        )?;
+        transaction.execute(
             "INSERT INTO jobs (
-                source_json, filename, target_dir, state, backend, total_bytes,
-                downloaded_bytes, supports_ranges, etag, last_modified, content_type,
+                source_json, filename, target_dir, state, queue_id, position, backend,
+                total_bytes, downloaded_bytes, supports_ranges, etag, last_modified, content_type,
                 error_message, error_retryable, options_json, created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
                 source_json,
                 record.filename,
                 record.target_dir.to_string_lossy(),
                 state_name(record.state),
+                record.queue_id,
+                position,
                 backend_name(record.backend),
                 record.total_bytes.map(|bytes| bytes as i64),
                 record.downloaded_bytes as i64,
@@ -118,7 +149,11 @@ impl Store {
             ],
         )?;
 
-        job.set_id(JobId(connection.last_insert_rowid()));
+        let id = transaction.last_insert_rowid();
+        transaction.commit()?;
+
+        job.set_id(JobId(id));
+        job.set_queue_position(record.queue_id, position);
         Ok(())
     }
 
@@ -147,10 +182,11 @@ impl Store {
         let connection = self.lock()?;
         let changed = connection.execute(
             "UPDATE jobs SET
-                source_json = ?2, filename = ?3, target_dir = ?4, state = ?5, backend = ?6,
-                total_bytes = ?7, downloaded_bytes = ?8, supports_ranges = ?9, etag = ?10,
-                last_modified = ?11, content_type = ?12, error_message = ?13,
-                error_retryable = ?14, options_json = ?15, created_at = ?16, updated_at = ?17
+                source_json = ?2, filename = ?3, target_dir = ?4, state = ?5, queue_id = ?6,
+                position = ?7, backend = ?8, total_bytes = ?9, downloaded_bytes = ?10,
+                supports_ranges = ?11, etag = ?12, last_modified = ?13, content_type = ?14,
+                error_message = ?15, error_retryable = ?16, options_json = ?17,
+                created_at = ?18, updated_at = ?19
             WHERE id = ?1",
             params![
                 record.id.0,
@@ -158,6 +194,8 @@ impl Store {
                 record.filename,
                 record.target_dir.to_string_lossy(),
                 state_name(record.state),
+                record.queue_id,
+                record.position,
                 backend_name(record.backend),
                 record.total_bytes.map(|bytes| bytes as i64),
                 record.downloaded_bytes as i64,
@@ -193,12 +231,172 @@ impl Store {
         Ok(jobs)
     }
 
+    /// Replaces all persisted segments of a job.
+    pub fn replace_segments(&self, job: JobId, segments: &[Segment]) -> Result<(), StoreError> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction()?;
+        transaction.execute("DELETE FROM segments WHERE job_id = ?1", params![job.0])?;
+        {
+            let mut statement = transaction.prepare(
+                "INSERT INTO segments (job_id, idx, start, \"end\", downloaded)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )?;
+            for segment in segments {
+                statement.execute(params![
+                    job.0,
+                    i64::from(segment.index),
+                    segment.start as i64,
+                    segment.end as i64,
+                    segment.downloaded as i64,
+                ])?;
+            }
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Lists the segments of a job ordered by index.
+    pub fn list_segments(&self, job: JobId) -> Result<Vec<Segment>, StoreError> {
+        let connection = self.lock()?;
+        let mut statement = connection.prepare(
+            "SELECT idx, start, \"end\", downloaded FROM segments
+             WHERE job_id = ?1 ORDER BY idx ASC",
+        )?;
+        let rows = statement.query_map(params![job.0], |row| {
+            Ok(Segment {
+                index: row.get::<_, i64>(0)? as u32,
+                start: row.get::<_, i64>(1)? as u64,
+                end: row.get::<_, i64>(2)? as u64,
+                downloaded: row.get::<_, i64>(3)? as u64,
+            })
+        })?;
+
+        let mut segments = Vec::new();
+        for row in rows {
+            segments.push(row?);
+        }
+        Ok(segments)
+    }
+
+    /// Deletes all persisted segments of a job.
+    pub fn clear_segments(&self, job: JobId) -> Result<(), StoreError> {
+        let connection = self.lock()?;
+        connection.execute("DELETE FROM segments WHERE job_id = ?1", params![job.0])?;
+        Ok(())
+    }
+
+    /// Creates a named queue.
+    pub fn create_queue(&self, name: &str, max_concurrent: u32) -> Result<Queue, StoreError> {
+        let connection = self.lock()?;
+        connection.execute(
+            "INSERT INTO queues (name, max_concurrent) VALUES (?1, ?2)",
+            params![name, i64::from(max_concurrent)],
+        )?;
+        Ok(Queue {
+            id: connection.last_insert_rowid(),
+            name: name.to_string(),
+            max_concurrent,
+        })
+    }
+
+    /// Lists every queue ordered by id.
+    pub fn list_queues(&self) -> Result<Vec<Queue>, StoreError> {
+        let connection = self.lock()?;
+        let mut statement =
+            connection.prepare("SELECT id, name, max_concurrent FROM queues ORDER BY id ASC")?;
+        let rows = statement.query_map([], |row| {
+            Ok(Queue {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                max_concurrent: row.get::<_, i64>(2)? as u32,
+            })
+        })?;
+
+        let mut queues = Vec::new();
+        for row in rows {
+            queues.push(row?);
+        }
+        Ok(queues)
+    }
+
+    /// Loads one queue by name.
+    pub fn queue_by_name(&self, name: &str) -> Result<Queue, StoreError> {
+        let connection = self.lock()?;
+        let queue = connection
+            .query_row(
+                "SELECT id, name, max_concurrent FROM queues WHERE name = ?1",
+                params![name],
+                |row| {
+                    Ok(Queue {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        max_concurrent: row.get::<_, i64>(2)? as u32,
+                    })
+                },
+            )
+            .optional()?;
+
+        queue.ok_or_else(|| StoreError::QueueNotFound(name.to_string()))
+    }
+
+    /// Changes the concurrency limit of a queue.
+    pub fn set_queue_limit(&self, id: i64, max_concurrent: u32) -> Result<(), StoreError> {
+        let connection = self.lock()?;
+        let changed = connection.execute(
+            "UPDATE queues SET max_concurrent = ?2 WHERE id = ?1",
+            params![id, i64::from(max_concurrent)],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::QueueNotFound(id.to_string()));
+        }
+        Ok(())
+    }
+
+    /// Lists the jobs of a queue in execution order.
+    pub fn queue_jobs(&self, queue_id: i64) -> Result<Vec<Job>, StoreError> {
+        let connection = self.lock()?;
+        let mut statement = connection.prepare(&format!(
+            "SELECT {JOB_COLUMNS} FROM jobs WHERE queue_id = ?1 ORDER BY position ASC, id ASC"
+        ))?;
+        let rows = statement.query_map(params![queue_id], db_job_from_row)?;
+
+        let mut jobs = Vec::new();
+        for row in rows {
+            jobs.push(to_job(row?)?);
+        }
+        Ok(jobs)
+    }
+
+    /// Moves a job to a new position in its queue.
+    pub fn set_job_position(&self, id: JobId, position: i64) -> Result<(), StoreError> {
+        let connection = self.lock()?;
+        let changed = connection.execute(
+            "UPDATE jobs SET position = ?2 WHERE id = ?1",
+            params![id.0, position],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::JobNotFound(id));
+        }
+        Ok(())
+    }
+
+    /// Pauses jobs that were running when the process stopped.
+    pub fn recover_interrupted(&self) -> Result<usize, StoreError> {
+        let connection = self.lock()?;
+        let changed = connection.execute(
+            "UPDATE jobs SET state = 'paused', updated_at = ?1
+             WHERE state IN ('probing', 'downloading', 'verifying')",
+            params![now_millis()],
+        )?;
+        Ok(changed)
+    }
+
     fn from_connection(connection: Connection) -> Result<Self, StoreError> {
         connection.pragma_update(None, "foreign_keys", true)?;
         connection.pragma_update(None, "busy_timeout", 5000_i64)?;
 
         let store = Self {
-            connection: Mutex::new(connection),
+            connection: Arc::new(Mutex::new(connection)),
         };
         store.migrate()?;
         Ok(store)
@@ -241,6 +439,8 @@ pub enum StoreError {
     Database(#[from] rusqlite::Error),
     #[error("job not found: {0:?}")]
     JobNotFound(JobId),
+    #[error("queue not found: {0}")]
+    QueueNotFound(String),
     #[error("store lock poisoned")]
     LockPoisoned,
     #[error("json error: {0}")]
@@ -259,6 +459,8 @@ struct DbJob {
     filename: String,
     target_dir: String,
     state: String,
+    queue_id: i64,
+    position: i64,
     backend: String,
     total_bytes: Option<i64>,
     downloaded_bytes: i64,
@@ -280,18 +482,20 @@ fn db_job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DbJob> {
         filename: row.get(2)?,
         target_dir: row.get(3)?,
         state: row.get(4)?,
-        backend: row.get(5)?,
-        total_bytes: row.get(6)?,
-        downloaded_bytes: row.get(7)?,
-        supports_ranges: row.get(8)?,
-        etag: row.get(9)?,
-        last_modified: row.get(10)?,
-        content_type: row.get(11)?,
-        error_message: row.get(12)?,
-        error_retryable: row.get(13)?,
-        options_json: row.get(14)?,
-        created_at: row.get(15)?,
-        updated_at: row.get(16)?,
+        queue_id: row.get(5)?,
+        position: row.get(6)?,
+        backend: row.get(7)?,
+        total_bytes: row.get(8)?,
+        downloaded_bytes: row.get(9)?,
+        supports_ranges: row.get(10)?,
+        etag: row.get(11)?,
+        last_modified: row.get(12)?,
+        content_type: row.get(13)?,
+        error_message: row.get(14)?,
+        error_retryable: row.get(15)?,
+        options_json: row.get(16)?,
+        created_at: row.get(17)?,
+        updated_at: row.get(18)?,
     })
 }
 
@@ -311,6 +515,8 @@ fn to_job(row: DbJob) -> Result<Job, StoreError> {
         filename: row.filename,
         target_dir: PathBuf::from(row.target_dir),
         state,
+        queue_id: row.queue_id,
+        position: row.position,
         backend,
         total_bytes: row.total_bytes.map(|bytes| bytes as u64),
         downloaded_bytes: row.downloaded_bytes as u64,

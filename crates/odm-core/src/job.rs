@@ -152,6 +152,8 @@ pub struct Job {
     filename: String,
     target_dir: PathBuf,
     state: JobState,
+    queue_id: i64,
+    position: i64,
     backend: BackendKind,
     total_bytes: Option<u64>,
     downloaded_bytes: u64,
@@ -175,6 +177,8 @@ impl Job {
             filename: String::new(),
             target_dir,
             state: JobState::Queued,
+            queue_id: 1,
+            position: 0,
             backend: BackendKind::Http,
             total_bytes: None,
             downloaded_bytes: 0,
@@ -207,6 +211,14 @@ impl Job {
 
     pub fn state(&self) -> JobState {
         self.state
+    }
+
+    pub fn queue_id(&self) -> i64 {
+        self.queue_id
+    }
+
+    pub fn position(&self) -> i64 {
+        self.position
     }
 
     pub fn backend(&self) -> BackendKind {
@@ -312,6 +324,11 @@ impl Job {
         self.id = id;
     }
 
+    pub(crate) fn set_queue_position(&mut self, queue_id: i64, position: i64) {
+        self.queue_id = queue_id;
+        self.position = position;
+    }
+
     pub(crate) fn record(&self) -> JobRecord {
         JobRecord {
             id: self.id,
@@ -319,6 +336,8 @@ impl Job {
             filename: self.filename.clone(),
             target_dir: self.target_dir.clone(),
             state: self.state,
+            queue_id: self.queue_id,
+            position: self.position,
             backend: self.backend,
             total_bytes: self.total_bytes,
             downloaded_bytes: self.downloaded_bytes,
@@ -349,6 +368,8 @@ pub(crate) struct JobRecord {
     pub filename: String,
     pub target_dir: PathBuf,
     pub state: JobState,
+    pub queue_id: i64,
+    pub position: i64,
     pub backend: BackendKind,
     pub total_bytes: Option<u64>,
     pub downloaded_bytes: u64,
@@ -370,6 +391,8 @@ impl Job {
             filename: record.filename,
             target_dir: record.target_dir,
             state: record.state,
+            queue_id: record.queue_id,
+            position: record.position,
             backend: record.backend,
             total_bytes: record.total_bytes,
             downloaded_bytes: record.downloaded_bytes,
