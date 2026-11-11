@@ -4,7 +4,6 @@ use crate::messages::UserAction;
 use crate::state::ViewState;
 use crate::ui::format_bytes;
 use eframe::egui;
-use odm_api::{AddDownloadRequest, JobOptionsDto};
 use tokio::sync::mpsc;
 
 pub fn render_add_dialog(
@@ -26,9 +25,13 @@ pub fn render_add_dialog(
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
                     ui.label("URL:");
-                    let text_edit = egui::TextEdit::singleline(&mut state.add_dialog.url)
+                    let mut url = state.add_dialog.url.clone();
+                    let text_edit = egui::TextEdit::singleline(&mut url)
                         .desired_width(ui.available_width() - 80.0);
-                    ui.add(text_edit);
+                    let resp = ui.add(text_edit);
+                    if resp.changed() {
+                        state.update_add_dialog_url(url);
+                    }
 
                     if ui.button("Probe").clicked() && !state.add_dialog.url.is_empty() {
                         state.add_dialog.probing = true;
@@ -36,6 +39,16 @@ pub fn render_add_dialog(
                         let _ = action_tx.send(UserAction::Probe(state.add_dialog.url.clone()));
                     }
                 });
+
+                if !state.add_dialog.batch_preview.is_empty() {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(52, 152, 219),
+                        format!(
+                            "Batch URL pattern: {} URLs will be added",
+                            state.add_dialog.batch_preview.len()
+                        ),
+                    );
+                }
 
                 if state.add_dialog.probing {
                     ui.horizontal(|ui| {
@@ -89,6 +102,71 @@ pub fn render_add_dialog(
                 });
 
                 ui.horizontal(|ui| {
+                    ui.label("Category:");
+                    let cat_label = state
+                        .add_dialog
+                        .category
+                        .as_deref()
+                        .unwrap_or("None (Auto)");
+                    egui::ComboBox::from_id_salt("add_category_select")
+                        .selected_text(cat_label)
+                        .show_ui(ui, |ui| {
+                            if ui
+                                .selectable_label(
+                                    state.add_dialog.category.is_none(),
+                                    "None (Auto)",
+                                )
+                                .clicked()
+                            {
+                                state.add_dialog.category = None;
+                            }
+                            for cat in &state.categories {
+                                let is_selected =
+                                    state.add_dialog.category.as_deref() == Some(&cat.name);
+                                if ui.selectable_label(is_selected, &cat.name).clicked() {
+                                    state.add_dialog.category = Some(cat.name.clone());
+                                }
+                            }
+                        });
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("Checksum:");
+                    egui::ComboBox::from_id_salt("checksum_algo_select")
+                        .selected_text(&state.add_dialog.checksum_algo)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(
+                                &mut state.add_dialog.checksum_algo,
+                                "sha256".to_string(),
+                                "SHA-256",
+                            );
+                            ui.selectable_value(
+                                &mut state.add_dialog.checksum_algo,
+                                "sha1".to_string(),
+                                "SHA-1",
+                            );
+                            ui.selectable_value(
+                                &mut state.add_dialog.checksum_algo,
+                                "md5".to_string(),
+                                "MD5",
+                            );
+                        });
+                    ui.add(
+                        egui::TextEdit::singleline(&mut state.add_dialog.checksum_hash)
+                            .hint_text("Expected hash digest..."),
+                    );
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("Mirrors:");
+                    ui.add(
+                        egui::TextEdit::multiline(&mut state.add_dialog.mirrors)
+                            .hint_text("One mirror URL per line or comma-separated")
+                            .desired_rows(2),
+                    );
+                });
+
+                ui.horizontal(|ui| {
                     ui.label("Segments:");
                     ui.add(egui::Slider::new(&mut state.add_dialog.segments, 1..=32));
                 });
@@ -106,37 +184,10 @@ pub fn render_add_dialog(
 
                 ui.horizontal(|ui| {
                     if ui.button("Download Now").clicked() && !state.add_dialog.url.is_empty() {
-                        let req = AddDownloadRequest {
-                            url: state.add_dialog.url.clone(),
-                            filename: if state.add_dialog.filename.is_empty() {
-                                None
-                            } else {
-                                Some(state.add_dialog.filename.clone())
-                            },
-                            target_dir: if state.add_dialog.target_dir.is_empty() {
-                                None
-                            } else {
-                                Some(state.add_dialog.target_dir.clone())
-                            },
-                            queue: Some(state.add_dialog.queue.clone()),
-                            category: None,
-                            options: Some(JobOptionsDto {
-                                segments: Some(state.add_dialog.segments),
-                                speed_limit: if state.add_dialog.speed_limit == 0 {
-                                    None
-                                } else {
-                                    Some(state.add_dialog.speed_limit)
-                                },
-                                headers: None,
-                                user_agent: None,
-                                referer: None,
-                                cookies: None,
-                                checksum: None,
-                                mirrors: None,
-                            }),
-                        };
-
-                        let _ = action_tx.send(UserAction::AddDownload(Box::new(req)));
+                        let requests = state.build_add_download_requests();
+                        for req in requests {
+                            let _ = action_tx.send(UserAction::AddDownload(Box::new(req)));
+                        }
                         state.close_add_dialog();
                     }
 

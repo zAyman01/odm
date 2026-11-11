@@ -1,7 +1,7 @@
 //! Message types exchanged between the UI thread and the background bridge.
 use odm_api::{
-    AddDownloadRequest, DownloadDetailDto, DownloadItemDto, Event, ProbeResponse,
-    UpdateSettingsRequest,
+    AddDownloadRequest, CategoryDto, DownloadDetailDto, DownloadItemDto, Event, ProbeResponse,
+    QueueDto, UpdateSettingsRequest,
 };
 
 /// Actions dispatched from the UI thread to the background daemon bridge.
@@ -12,9 +12,26 @@ pub enum UserAction {
     Pause(i64),
     Resume(i64),
     Cancel(i64),
-    Remove { id: i64, delete_file: bool },
+    Remove {
+        id: i64,
+        delete_file: bool,
+    },
     UpdateSettings(UpdateSettingsRequest),
-    CreateQueue { name: String, concurrency: u32 },
+    CreateQueue {
+        name: String,
+        concurrency: u32,
+    },
+    SetCategory {
+        name: String,
+        directory: Option<String>,
+        extensions: Option<Vec<String>>,
+    },
+    UpdateQueueSchedule {
+        name: String,
+        start_time: String,
+        stop_time: Option<String>,
+        days: Option<Vec<String>>,
+    },
     Refresh,
 }
 
@@ -23,6 +40,8 @@ pub enum UserAction {
 pub enum GuiEvent {
     DaemonStatus(bool),
     DownloadsList(Vec<DownloadItemDto>),
+    CategoriesList(Vec<CategoryDto>),
+    QueuesList(Vec<QueueDto>),
     DownloadDetail(DownloadDetailDto),
     ProbeResult(Result<ProbeResponse, String>),
     EngineEvent(Event),

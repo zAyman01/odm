@@ -2555,6 +2555,7 @@ dependencies = [
  "futures-util",
  "notify-rust",
  "odm-api",
+ "odm-core",
  "reqwest",
  "serde",
  "serde_json",

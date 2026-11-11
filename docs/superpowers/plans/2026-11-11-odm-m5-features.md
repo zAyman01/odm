@@ -478,14 +478,14 @@ git commit -m "feat(cli): add batch expansion, checksums, mirrors and category c
 **Interfaces:**
 - Produces: GUI controls for checksum input, mirrors, batch URL expansion preview, category management, and queue scheduling.
 
-- [ ] **Step 1: Write GUI M5 state and reducer tests first**
+- [x] **Step 1: Write GUI M5 state and reducer tests first**
 
 `crates/odm-gui/tests/m5_gui_features.rs`:
 - Test adding batch URL: expands into multiple jobs in state.
 - Test checksum input in AddDialog prefilled and dispatched.
 - Test category sync and selection filtering.
 
-- [ ] **Step 2: Implement GUI UI components for M5**
+- [x] **Step 2: Implement GUI UI components for M5**
 
 In `crates/odm-gui/src/ui/add_dialog.rs`:
 - Add inputs for Checksum (algorithm selector + hash string).
@@ -499,7 +499,7 @@ In `crates/odm-gui/src/ui/settings_dialog.rs`:
 In `crates/odm-gui/src/ui/sidebar.rs`:
 - Display categories dynamically loaded from daemon with live badge counts.
 
-- [ ] **Step 3: Run GUI tests and verify gate**
+- [x] **Step 3: Run GUI tests and verify gate**
 
 Run:
 ```bash
@@ -510,7 +510,7 @@ cargo test --workspace
 cargo deny check
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add crates/odm-gui

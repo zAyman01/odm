@@ -75,11 +75,19 @@ pub fn render_sidebar(ui: &mut egui::Ui, state: &mut ViewState) {
         ui.separator();
         ui.label(egui::RichText::new("Categories").strong());
 
-        let categories = ["Documents", "Archives", "Media"];
-        for cat in categories {
-            let cat_filter = Filter::Category(cat.to_string());
+        for cat in &state.categories {
+            let cat_filter = Filter::Category(cat.name.clone());
+            let cat_count = state
+                .downloads
+                .iter()
+                .filter(|d| d.category.as_deref() == Some(&cat.name))
+                .count();
+
             if ui
-                .selectable_label(state.filter == cat_filter, format!("🏷 {cat}"))
+                .selectable_label(
+                    state.filter == cat_filter,
+                    format!("🏷 {} ({cat_count})", cat.name),
+                )
                 .clicked()
             {
                 state.filter = cat_filter;

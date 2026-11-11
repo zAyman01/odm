@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use odm_api::{
-    CreateQueueRequest, ErrorResponse, Event, ListDownloadsResponse, ProbeRequest, ProbeResponse,
+    CreateQueueRequest, ErrorResponse, Event, ListCategoriesResponse, ListDownloadsResponse,
+    ListQueuesResponse, ProbeRequest, ProbeResponse, SetCategoryRequest, UpdateQueueRequest,
     WsAuthRequest, WsAuthResponse,
 };
 use reqwest::Client;
@@ -55,11 +56,16 @@ impl DaemonBridge {
 
             let _ = ui_tx.send(GuiEvent::DaemonStatus(connected));
 
-            // 2. Initial fetch of downloads
+            // 2. Initial fetch of downloads, categories, queues
             if connected {
                 let _ =
                     fetch_and_send_downloads(&client, &server_url_clone, token.as_deref(), &ui_tx)
                         .await;
+                let _ =
+                    fetch_and_send_categories(&client, &server_url_clone, token.as_deref(), &ui_tx)
+                        .await;
+                let _ = fetch_and_send_queues(&client, &server_url_clone, token.as_deref(), &ui_tx)
+                    .await;
             }
 
             // 3. Spawn WebSocket subscriber task
@@ -225,8 +231,83 @@ impl DaemonBridge {
                         let _ = req.json(&body).send().await;
                     }
 
+                    UserAction::SetCategory {
+                        name,
+                        directory,
+                        extensions,
+                    } => {
+                        let url = format!("{server_url_clone}/api/v1/categories/{name}");
+                        let mut req = client.put(&url);
+                        if let Some(ref tok) = token {
+                            req = req.header(AUTHORIZATION, format!("Bearer {tok}"));
+                        }
+                        let body = SetCategoryRequest {
+                            directory,
+                            extensions,
+                        };
+                        if let Ok(resp) = req.json(&body).send().await {
+                            if resp.status().is_success() {
+                                let _ = fetch_and_send_categories(
+                                    &client,
+                                    &server_url_clone,
+                                    token.as_deref(),
+                                    &ui_tx,
+                                )
+                                .await;
+                            } else if let Ok(err) = resp.json::<ErrorResponse>().await {
+                                let _ = ui_tx.send(GuiEvent::ErrorMessage(err.error.message));
+                            }
+                        }
+                    }
+
+                    UserAction::UpdateQueueSchedule {
+                        name,
+                        start_time,
+                        stop_time,
+                        days,
+                    } => {
+                        let url = format!("{server_url_clone}/api/v1/queues/{name}");
+                        let mut req = client.patch(&url);
+                        if let Some(ref tok) = token {
+                            req = req.header(AUTHORIZATION, format!("Bearer {tok}"));
+                        }
+                        let body = UpdateQueueRequest {
+                            max_concurrent: 4,
+                            schedule_start: Some(start_time),
+                            schedule_stop: stop_time,
+                            schedule_days: days,
+                        };
+                        if let Ok(resp) = req.json(&body).send().await {
+                            if resp.status().is_success() {
+                                let _ = fetch_and_send_queues(
+                                    &client,
+                                    &server_url_clone,
+                                    token.as_deref(),
+                                    &ui_tx,
+                                )
+                                .await;
+                            } else if let Ok(err) = resp.json::<ErrorResponse>().await {
+                                let _ = ui_tx.send(GuiEvent::ErrorMessage(err.error.message));
+                            }
+                        }
+                    }
+
                     UserAction::Refresh => {
                         let _ = fetch_and_send_downloads(
+                            &client,
+                            &server_url_clone,
+                            token.as_deref(),
+                            &ui_tx,
+                        )
+                        .await;
+                        let _ = fetch_and_send_categories(
+                            &client,
+                            &server_url_clone,
+                            token.as_deref(),
+                            &ui_tx,
+                        )
+                        .await;
+                        let _ = fetch_and_send_queues(
                             &client,
                             &server_url_clone,
                             token.as_deref(),
@@ -260,6 +341,48 @@ async fn fetch_and_send_downloads(
         && let Ok(list) = resp.json::<ListDownloadsResponse>().await
     {
         let _ = ui_tx.send(GuiEvent::DownloadsList(list.downloads));
+        return Ok(());
+    }
+    Err(())
+}
+
+async fn fetch_and_send_categories(
+    client: &Client,
+    server_url: &str,
+    token: Option<&str>,
+    ui_tx: &mpsc::UnboundedSender<GuiEvent>,
+) -> Result<(), ()> {
+    let url = format!("{server_url}/api/v1/categories");
+    let mut req = client.get(&url);
+    if let Some(tok) = token {
+        req = req.header(AUTHORIZATION, format!("Bearer {tok}"));
+    }
+    if let Ok(resp) = req.send().await
+        && resp.status().is_success()
+        && let Ok(list) = resp.json::<ListCategoriesResponse>().await
+    {
+        let _ = ui_tx.send(GuiEvent::CategoriesList(list.categories));
+        return Ok(());
+    }
+    Err(())
+}
+
+async fn fetch_and_send_queues(
+    client: &Client,
+    server_url: &str,
+    token: Option<&str>,
+    ui_tx: &mpsc::UnboundedSender<GuiEvent>,
+) -> Result<(), ()> {
+    let url = format!("{server_url}/api/v1/queues");
+    let mut req = client.get(&url);
+    if let Some(tok) = token {
+        req = req.header(AUTHORIZATION, format!("Bearer {tok}"));
+    }
+    if let Ok(resp) = req.send().await
+        && resp.status().is_success()
+        && let Ok(list) = resp.json::<ListQueuesResponse>().await
+    {
+        let _ = ui_tx.send(GuiEvent::QueuesList(list.queues));
         return Ok(());
     }
     Err(())
