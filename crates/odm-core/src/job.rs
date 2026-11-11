@@ -126,6 +126,7 @@ pub struct JobOptions {
     pub cookies: Option<String>,
     pub segments: Option<u32>,
     pub speed_limit: Option<u64>,
+    pub checksum: Option<crate::checksum::Checksum>,
 }
 
 /// Metadata discovered before or while downloading.

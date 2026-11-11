@@ -6,7 +6,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use odm_api::{
-    AddDownloadRequest, AddDownloadResponse, CreateQueueRequest, DownloadDetailDto,
+    AddDownloadRequest, AddDownloadResponse, ChecksumDto, CreateQueueRequest, DownloadDetailDto,
     DownloadItemDto, ErrorResponse, HealthResponse, JobOptionsDto, ListDownloadsResponse,
     ListQueuesResponse, ProbeRequest, ProbeResponse, QueueDto, SegmentDto, SettingsDto,
     UpdateQueueRequest, UpdateSettingsRequest,
@@ -72,6 +72,14 @@ pub fn job_to_detail_dto(job: &Job, store: &Store) -> DownloadDetailDto {
         user_agent: job.options().user_agent.clone(),
         referer: job.options().referer.clone(),
         cookies: job.options().cookies.clone(),
+        checksum: job.options().checksum.as_ref().map(|c| ChecksumDto {
+            algorithm: match c.algorithm {
+                odm_core::checksum::ChecksumAlgorithm::Sha256 => odm_api::ChecksumAlgorithm::Sha256,
+                odm_core::checksum::ChecksumAlgorithm::Sha1 => odm_api::ChecksumAlgorithm::Sha1,
+                odm_core::checksum::ChecksumAlgorithm::Md5 => odm_api::ChecksumAlgorithm::Md5,
+            },
+            digest: c.expected.clone(),
+        }),
     };
 
     DownloadDetailDto {
@@ -190,6 +198,18 @@ pub async fn add_download_handler(
         }
         if let Some(ref c) = opts.cookies {
             options.cookies = Some(c.clone());
+        }
+        if let Some(ref cs) = opts.checksum {
+            options.checksum = Some(odm_core::checksum::Checksum {
+                algorithm: match cs.algorithm {
+                    odm_api::ChecksumAlgorithm::Sha256 => {
+                        odm_core::checksum::ChecksumAlgorithm::Sha256
+                    }
+                    odm_api::ChecksumAlgorithm::Sha1 => odm_core::checksum::ChecksumAlgorithm::Sha1,
+                    odm_api::ChecksumAlgorithm::Md5 => odm_core::checksum::ChecksumAlgorithm::Md5,
+                },
+                expected: cs.digest.clone(),
+            });
         }
     }
 

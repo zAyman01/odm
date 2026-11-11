@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 pub mod backend;
+pub mod checksum;
 pub mod engine;
 pub mod event;
 pub mod http;
@@ -17,6 +18,7 @@ pub use backend::{
     Backend, BackendError, ControlCommand, ControlHandle, ControlToken, JobContext, ProgressSink,
     ProgressUpdate, RunOutcome,
 };
+pub use checksum::{Checksum, ChecksumAlgorithm, ChecksumError, verify_file_checksum};
 pub use engine::{Engine, EngineError};
 pub use event::Event;
 pub use http::HttpBackend;

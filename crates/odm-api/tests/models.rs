@@ -141,3 +141,26 @@ fn event_variants_roundtrip_tagged_shape() {
     let auth_json = serde_json::to_string(&auth).unwrap();
     assert_eq!(auth_json, r#"{"token":"secret123"}"#);
 }
+
+#[test]
+fn checksum_dto_parse_and_roundtrip() {
+    use odm_api::{ChecksumAlgorithm, ChecksumDto};
+    use std::str::FromStr;
+
+    let cs = ChecksumDto::from_str(
+        "sha256:b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+    )
+    .unwrap();
+    assert_eq!(cs.algorithm, ChecksumAlgorithm::Sha256);
+    assert_eq!(
+        cs.to_string(),
+        "sha256:b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+    );
+
+    let cs_raw = ChecksumDto::from_str("5eb63bbbe01eeed093cb22bb8f5acdc3").unwrap();
+    assert_eq!(cs_raw.algorithm, ChecksumAlgorithm::Md5);
+
+    let json = serde_json::to_string(&cs).unwrap();
+    let parsed: ChecksumDto = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed, cs);
+}

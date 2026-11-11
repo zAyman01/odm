@@ -130,6 +130,7 @@ pub fn render_add_dialog(
                                 user_agent: None,
                                 referer: None,
                                 cookies: None,
+                                checksum: None,
                             }),
                         };
 

@@ -98,6 +98,7 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
                     user_agent: None,
                     referer: None,
                     cookies: None,
+                    checksum: None,
                 })
             } else {
                 None

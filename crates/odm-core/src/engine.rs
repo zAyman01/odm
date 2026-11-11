@@ -278,14 +278,53 @@ impl Engine {
         let downloaded_bytes = progress_task.await.unwrap_or(job.downloaded_bytes());
         job.set_downloaded_bytes(downloaded_bytes);
 
-        let next = match outcome {
-            RunOutcome::Completed => JobState::Completed,
-            RunOutcome::Paused => JobState::Paused,
-            RunOutcome::Cancelled => JobState::Cancelled,
-        };
-        job.transition_to(next)?;
-        self.store.update_job(&job)?;
-        let _ = self.events.send(Event::JobStateChanged { id, state: next });
+        match outcome {
+            RunOutcome::Completed => {
+                if let Some(checksum) = job.options().checksum.clone() {
+                    job.transition_to(JobState::Verifying)?;
+                    self.store.update_job(&job)?;
+                    let _ = self.events.send(Event::JobStateChanged {
+                        id,
+                        state: JobState::Verifying,
+                    });
+
+                    if let Err(err) =
+                        crate::checksum::verify_file_checksum(&job.target_path(), &checksum).await
+                    {
+                        job.set_error(err.to_string(), false);
+                        job.transition_to(JobState::Failed)?;
+                        self.store.update_job(&job)?;
+                        let _ = self.events.send(Event::JobStateChanged {
+                            id,
+                            state: JobState::Failed,
+                        });
+                        return Err(EngineError::Checksum(err));
+                    }
+                }
+                job.transition_to(JobState::Completed)?;
+                self.store.update_job(&job)?;
+                let _ = self.events.send(Event::JobStateChanged {
+                    id,
+                    state: JobState::Completed,
+                });
+            }
+            RunOutcome::Paused => {
+                job.transition_to(JobState::Paused)?;
+                self.store.update_job(&job)?;
+                let _ = self.events.send(Event::JobStateChanged {
+                    id,
+                    state: JobState::Paused,
+                });
+            }
+            RunOutcome::Cancelled => {
+                job.transition_to(JobState::Cancelled)?;
+                self.store.update_job(&job)?;
+                let _ = self.events.send(Event::JobStateChanged {
+                    id,
+                    state: JobState::Cancelled,
+                });
+            }
+        }
         Ok(job)
     }
 
@@ -349,6 +388,8 @@ pub enum EngineError {
     Backend(#[from] BackendError),
     #[error("transition error: {0}")]
     Transition(#[from] TransitionError),
+    #[error("checksum error: {0}")]
+    Checksum(#[from] crate::checksum::ChecksumError),
     #[error("join error: {0}")]
     Join(String),
     #[error("invalid url: {0}")]

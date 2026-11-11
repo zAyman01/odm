@@ -1,6 +1,8 @@
 //! Download job requests, responses and DTOs.
 use serde::{Deserialize, Serialize};
 
+use crate::checksum::ChecksumDto;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct JobOptionsDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -15,6 +17,8 @@ pub struct JobOptionsDto {
     pub referer: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cookies: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checksum: Option<ChecksumDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
