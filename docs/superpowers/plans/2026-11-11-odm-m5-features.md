@@ -178,7 +178,7 @@ git commit -m "feat(core): implement checksum verification and verifying state p
 **Interfaces:**
 - Produces: `expand_batch_url(pattern: &str) -> Result<Vec<String>, BatchError>`.
 
-- [ ] **Step 1: Write batch URL expansion unit tests first**
+- [x] **Step 1: Write batch URL expansion unit tests first**
 
 `crates/odm-core/tests/batch_urls.rs`:
 - Test numerical ranges: `http://example.com/file[001-005].zip` expands to `file001.zip` through `file005.zip`.
@@ -188,13 +188,13 @@ git commit -m "feat(core): implement checksum verification and verifying state p
 - Test normal URL with no brackets returns single URL.
 - Test syntax errors (unclosed brackets, invalid numbers) return typed error.
 
-- [ ] **Step 2: Implement batch expansion parser**
+- [x] **Step 2: Implement batch expansion parser**
 
 In `crates/odm-core/src/batch.rs`:
 - Implement `expand_batch_url` using recursive / Cartesian product expansion.
 - Preserve zero-padding width based on starting number string length.
 
-- [ ] **Step 3: Run batch tests and verify gate**
+- [x] **Step 3: Run batch tests and verify gate**
 
 Run:
 ```bash
@@ -205,7 +205,7 @@ cargo test --workspace
 cargo deny check
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add crates/odm-core
