@@ -1026,12 +1026,16 @@ dependencies = [
 name = "odm-gui"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "directories",
+ "futures-util",
  "odm-api",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
 ]
 
 [[package]]
@@ -1807,6 +1811,7 @@ checksum = "8f72a05e828585856dacd553fba484c242c46e391fb0e58917c942ee9202915c"
 dependencies = [
  "futures-util",
  "log",
+ "rustls-pki-types",
  "tokio",
  "tungstenite",
 ]
