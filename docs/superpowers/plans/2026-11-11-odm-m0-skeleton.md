@@ -525,14 +525,14 @@ git commit -m "ci: add cargo-deny config and CI workflow"
 - Consumes: nothing.
 - Produces: the license files that `license = "MIT OR Apache-2.0"` refers to; a README that later milestones extend.
 
-- [ ] **Step 1: Download the Apache license and verify it byte for byte**
+- [x] **Step 1: Download the Apache license and verify it byte for byte**
 
 Do not type this file by hand.
 
 Run: `curl -fsSL https://www.apache.org/licenses/LICENSE-2.0.txt -o LICENSE-APACHE && sha256sum LICENSE-APACHE`
 Expected: `cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30 *LICENSE-APACHE` (a space instead of `*` is also correct). If the hash differs, delete the file, stop and report.
 
-- [ ] **Step 2: Create `LICENSE-MIT`**
+- [x] **Step 2: Create `LICENSE-MIT`**
 
 ```
 MIT License
@@ -558,7 +558,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-- [ ] **Step 3: Create `README.md`**
+- [x] **Step 3: Create `README.md`**
 
 ````markdown
 # odm — Open Download Manager
@@ -618,7 +618,7 @@ at your option.
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this project by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
 ````
 
-- [ ] **Step 4: Create `CHANGELOG.md`**
+- [x] **Step 4: Create `CHANGELOG.md`**
 
 ```markdown
 # Changelog
@@ -634,7 +634,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Workspace skeleton, CI and repository files.
 ```
 
-- [ ] **Step 5: Verify**
+- [x] **Step 5: Verify**
 
 Run: `head -1 LICENSE-MIT && grep -c "Mahmoud Ayman" LICENSE-MIT && grep -c "LICENSE-APACHE" README.md && grep -c "Unreleased" CHANGELOG.md`
 Expected:
@@ -646,7 +646,7 @@ MIT License
 1
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add LICENSE-MIT LICENSE-APACHE README.md CHANGELOG.md
