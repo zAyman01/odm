@@ -20,6 +20,7 @@ axum = { version = "0.8.9", features = ["ws", "tokio", "http1", "json"] }
 clap = { version = "4.6.7", features = ["derive"] }
 directories = "6.0.0"
 fastrand = "2.5.0"
+futures-util = "0.3.34"
 odm-api = { path = "../odm-api" }
 odm-core = { path = "../odm-core" }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -32,8 +33,11 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [dev-dependencies]
+futures-util = "0.3.34"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json"] }
 tempfile = "3.27.0"
 tokio = { version = "1.54.1", features = ["test-util"] }
+tokio-tungstenite = "0.29.0"
 
 [lints]
 workspace = true

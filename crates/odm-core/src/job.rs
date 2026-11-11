@@ -300,6 +300,16 @@ impl Job {
         self.updated_at = now_millis();
     }
 
+    pub fn set_filename(&mut self, filename: impl Into<String>) {
+        self.filename = filename.into();
+        self.updated_at = now_millis();
+    }
+
+    pub fn set_queue_id(&mut self, queue_id: i64) {
+        self.queue_id = queue_id;
+        self.updated_at = now_millis();
+    }
+
     pub fn set_backend(&mut self, backend: BackendKind) {
         self.backend = backend;
         self.updated_at = now_millis();

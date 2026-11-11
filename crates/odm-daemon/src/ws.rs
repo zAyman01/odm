@@ -1,0 +1,103 @@
+//! WebSocket endpoint for streaming daemon events.
+use std::time::Duration;
+
+use axum::extract::State;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::response::IntoResponse;
+use futures_util::{SinkExt, StreamExt};
+use odm_api::{Event, WsAuthRequest, WsAuthResponse};
+use odm_core::Event as CoreEvent;
+
+use crate::routes::job_to_dto;
+use crate::state::AppState;
+
+pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_socket(socket, state))
+}
+
+async fn handle_socket(mut socket: WebSocket, state: AppState) {
+    // 1. Wait for first message: authentication
+    let auth_msg = tokio::time::timeout(Duration::from_secs(5), socket.next()).await;
+    let authenticated = match auth_msg {
+        Ok(Some(Ok(Message::Text(text)))) => {
+            if let Ok(req) = serde_json::from_str::<WsAuthRequest>(&text) {
+                req.token == state.config.token
+            } else {
+                false
+            }
+        }
+        _ => false,
+    };
+
+    if !authenticated {
+        let _ = socket
+            .send(Message::Text(
+                serde_json::to_string(&WsAuthResponse {
+                    authenticated: false,
+                })
+                .unwrap_or_default()
+                .into(),
+            ))
+            .await;
+        let _ = socket.close().await;
+        return;
+    }
+
+    // Send success
+    let _ = socket
+        .send(Message::Text(
+            serde_json::to_string(&WsAuthResponse {
+                authenticated: true,
+            })
+            .unwrap_or_default()
+            .into(),
+        ))
+        .await;
+
+    // 2. Stream engine events
+    let mut rx = state.engine.subscribe();
+    while let Ok(core_event) = rx.recv().await {
+        let api_event = match core_event {
+            CoreEvent::JobAdded(id) => {
+                if let Ok(job) = state.engine.store().get_job(id) {
+                    Event::JobAdded(job_to_dto(&job, state.engine.store()))
+                } else {
+                    continue;
+                }
+            }
+            CoreEvent::JobStateChanged { id, state: st } => Event::JobStateChanged {
+                id: id.0,
+                state: format!("{st:?}").to_lowercase(),
+            },
+            CoreEvent::JobProgress {
+                id,
+                downloaded_bytes,
+                total_bytes,
+                speed_bps,
+            } => Event::JobProgress {
+                id: id.0,
+                downloaded_bytes,
+                total_bytes,
+                speed_bps,
+            },
+            CoreEvent::JobRemoved(id) => Event::JobRemoved(id.0),
+            CoreEvent::QueueChanged(name) => {
+                if let Ok(q) = state.engine.store().queue_by_name(&name) {
+                    Event::QueueChanged(odm_api::QueueDto {
+                        id: q.id,
+                        name: q.name,
+                        max_concurrent: q.max_concurrent,
+                    })
+                } else {
+                    continue;
+                }
+            }
+        };
+
+        if let Ok(json) = serde_json::to_string(&api_event)
+            && socket.send(Message::Text(json.into())).await.is_err()
+        {
+            break;
+        }
+    }
+}

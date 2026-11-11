@@ -48,7 +48,11 @@ pub async fn require_bearer_token(
     next: Next,
 ) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
     let path = req.uri().path();
-    if path == "/api/v1/health" || path == "/health" {
+    if path == "/api/v1/health"
+        || path == "/health"
+        || path == "/api/v1/events"
+        || path == "/events"
+    {
         return Ok(next.run(req).await);
     }
 

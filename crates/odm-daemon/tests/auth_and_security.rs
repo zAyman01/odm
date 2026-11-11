@@ -13,7 +13,7 @@ use tower::ServiceExt;
 async fn health_endpoint_bypasses_auth() {
     let dir = tempdir().unwrap();
     let config = DaemonConfig::for_test(dir.path(), "test-secret-token");
-    let app = build_router(config);
+    let app = build_router(config).unwrap();
 
     let req = Request::builder()
         .uri("/api/v1/health")
@@ -29,7 +29,7 @@ async fn health_endpoint_bypasses_auth() {
 async fn unauthenticated_request_is_rejected_with_401() {
     let dir = tempdir().unwrap();
     let config = DaemonConfig::for_test(dir.path(), "test-secret-token");
-    let app = build_router(config);
+    let app = build_router(config).unwrap();
 
     let req = Request::builder()
         .uri("/api/v1/downloads")
@@ -49,7 +49,7 @@ async fn unauthenticated_request_is_rejected_with_401() {
 async fn invalid_host_header_is_rejected_with_403() {
     let dir = tempdir().unwrap();
     let config = DaemonConfig::for_test(dir.path(), "test-secret-token");
-    let app = build_router(config);
+    let app = build_router(config).unwrap();
 
     let req = Request::builder()
         .uri("/api/v1/health")
@@ -69,7 +69,7 @@ async fn invalid_host_header_is_rejected_with_403() {
 async fn authenticated_request_with_valid_bearer_succeeds() {
     let dir = tempdir().unwrap();
     let config = DaemonConfig::for_test(dir.path(), "test-secret-token");
-    let app = build_router(config);
+    let app = build_router(config).unwrap();
 
     let req = Request::builder()
         .uri("/api/v1/downloads")
