@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use tokio::task::JoinSet;
 use url::Url;
 
 use crate::backend::{
@@ -141,6 +142,17 @@ impl Engine {
                 }
             };
 
+            let other_jobs = self.store.list_jobs()?;
+            let taken: Vec<String> = other_jobs
+                .into_iter()
+                .filter(|other| other.id() != id && other.target_dir() == job.target_dir())
+                .map(|other| other.filename().to_string())
+                .filter(|name| !name.is_empty())
+                .collect();
+
+            let mut probe = probe;
+            probe.filename = resolve_filename_conflict(job.target_dir(), &probe.filename, &taken);
+
             job.apply_probe(probe);
 
             if control.is_cancelled() {
@@ -192,6 +204,56 @@ impl Engine {
         self.store.update_job(&job)?;
         Ok(job)
     }
+
+    /// Runs all queued jobs in a queue with bounded concurrency.
+    pub async fn run_queue(
+        &self,
+        name: &str,
+    ) -> Result<Vec<Result<Job, EngineError>>, EngineError> {
+        let queue = self.store.queue_by_name(name)?;
+        let jobs = self.store.queue_jobs(queue.id)?;
+        let queued_ids: Vec<JobId> = jobs
+            .into_iter()
+            .filter(|j| j.state() == JobState::Queued)
+            .map(|j| j.id())
+            .collect();
+
+        let mut results = Vec::new();
+        if queued_ids.is_empty() {
+            return Ok(results);
+        }
+
+        let max_concurrent = queue.max_concurrent.max(1) as usize;
+        let mut join_set = JoinSet::new();
+        let mut iter = queued_ids.into_iter();
+
+        for _ in 0..max_concurrent {
+            if let Some(id) = iter.next() {
+                let engine = self.clone();
+                join_set.spawn(async move { engine.run(id).await });
+            } else {
+                break;
+            }
+        }
+
+        while let Some(res) = join_set.join_next().await {
+            match res {
+                Ok(run_result) => {
+                    results.push(run_result);
+                }
+                Err(join_err) => {
+                    return Err(EngineError::Join(join_err.to_string()));
+                }
+            }
+
+            if let Some(id) = iter.next() {
+                let engine = self.clone();
+                join_set.spawn(async move { engine.run(id).await });
+            }
+        }
+
+        Ok(results)
+    }
 }
 
 /// Errors returned by the engine.
@@ -203,10 +265,45 @@ pub enum EngineError {
     Backend(#[from] BackendError),
     #[error("transition error: {0}")]
     Transition(#[from] TransitionError),
+    #[error("join error: {0}")]
+    Join(String),
     #[error("invalid url: {0}")]
     InvalidUrl(String),
     #[error("job is not runnable in state {0:?}")]
     InvalidState(JobState),
     #[error("job {0:?} is not currently running")]
     NotRunning(JobId),
+}
+
+fn resolve_filename_conflict(
+    target_dir: &std::path::Path,
+    filename: &str,
+    taken_names: &[String],
+) -> String {
+    let (stem, ext) = match filename.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => (stem, Some(ext)),
+        _ => (filename, None),
+    };
+
+    let is_taken = |candidate: &str| -> bool {
+        target_dir.join(candidate).exists()
+            || target_dir.join(format!("{candidate}.part")).exists()
+            || taken_names.iter().any(|name| name == candidate)
+    };
+
+    if !is_taken(filename) {
+        return filename.to_string();
+    }
+
+    let mut counter = 1;
+    loop {
+        let candidate = match ext {
+            Some(ext) => format!("{stem} ({counter}).{ext}"),
+            None => format!("{stem} ({counter})"),
+        };
+        if !is_taken(&candidate) {
+            return candidate;
+        }
+        counter += 1;
+    }
 }

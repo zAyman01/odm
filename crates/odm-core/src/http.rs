@@ -218,7 +218,9 @@ impl HttpBackend {
 
         file.flush().await?;
         drop(file);
-        tokio::fs::rename(&part_path, ctx.job.target_path()).await?;
+        if part_path.exists() {
+            tokio::fs::rename(&part_path, ctx.job.target_path()).await?;
+        }
         Ok(RunOutcome::Completed)
     }
 
@@ -353,7 +355,9 @@ impl HttpBackend {
 
             if is_done {
                 ctx.store.clear_segments(ctx.job.id())?;
-                tokio::fs::rename(&part_path, ctx.job.target_path()).await?;
+                if part_path.exists() {
+                    tokio::fs::rename(&part_path, ctx.job.target_path()).await?;
+                }
                 return Ok(RunOutcome::Completed);
             }
 
