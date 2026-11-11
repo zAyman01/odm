@@ -228,18 +228,18 @@ git commit -m "feat(core): implement batch url bracket pattern expansion"
 - Consumes: `quick-xml = "0.41.0"`.
 - Produces: `parse_metalink(xml: &str) -> Result<MetalinkSpec, MetalinkError>`, mirror rotation in `HttpBackend`.
 
-- [ ] **Step 1: Write metalink & mirror tests first**
+- [x] **Step 1: Write metalink & mirror tests first**
 
 `crates/odm-core/tests/metalink_and_mirrors.rs`:
 - Test parsing valid `.metalink` (v3) XML with `<file>`, `<url>`, `<verification><hash>`.
 - Test parsing valid `.meta4` (v4) XML with `<file>`, `<url priority="...">`, `<hash type="sha-256">`.
 - Test multi-mirror HTTP download: segments distributed between mock servers; if one mock server returns 500, remaining server handles the segment.
 
-- [ ] **Step 2: Add quick-xml to `crates/odm-core/Cargo.toml`**
+- [x] **Step 2: Add quick-xml to `crates/odm-core/Cargo.toml`**
 
 Add `quick-xml = "0.41.0"`. Run `cargo deny check`.
 
-- [ ] **Step 3: Implement Metalink parser and mirror pool**
+- [x] **Step 3: Implement Metalink parser and mirror pool**
 
 In `crates/odm-core/src/metalink.rs`:
 - Parse XML using `quick_xml::Reader`.
@@ -251,7 +251,7 @@ In `crates/odm-core/src/http.rs`:
 - Distribute segment requests across mirrors.
 - On segment failure, mark failing mirror degraded and reassign segment to an active mirror.
 
-- [ ] **Step 4: Run metalink & mirror tests and verify gate**
+- [x] **Step 4: Run metalink & mirror tests and verify gate**
 
 Run:
 ```bash
@@ -262,7 +262,7 @@ cargo test --workspace
 cargo deny check
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/odm-core crates/odm-api Cargo.lock

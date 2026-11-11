@@ -9,6 +9,7 @@ pub mod event;
 pub mod http;
 pub mod job;
 pub mod limiter;
+pub mod metalink;
 pub mod queue;
 pub mod segment;
 pub mod store;
@@ -29,6 +30,7 @@ pub use job::{
     TransitionError,
 };
 pub use limiter::{Limiter, TokenBucket};
+pub use metalink::{MetalinkError, MetalinkSpec, parse_metalink};
 pub use queue::Queue;
 pub use segment::Segment;
 pub use store::{Store, StoreError};

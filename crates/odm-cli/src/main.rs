@@ -99,6 +99,7 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
                     referer: None,
                     cookies: None,
                     checksum: None,
+                    mirrors: None,
                 })
             } else {
                 None

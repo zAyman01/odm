@@ -179,11 +179,43 @@ impl HttpBackend {
     }
 
     async fn run_single_stream(&self, ctx: JobContext) -> Result<RunOutcome, BackendError> {
-        let url = parse_url(ctx.job.source())?;
-        let response = self
-            .request(Method::GET, url, ctx.job.options())?
-            .send()
-            .await?;
+        let mut candidate_urls = vec![parse_url(ctx.job.source())?];
+        for m in &ctx.job.options().mirrors {
+            if let Ok(u) = Url::parse(m)
+                && !candidate_urls.contains(&u)
+            {
+                candidate_urls.push(u);
+            }
+        }
+
+        let mut response = None;
+        let mut last_err = None;
+        for url in candidate_urls {
+            match self.request(Method::GET, url, ctx.job.options()) {
+                Ok(req) => match req.send().await {
+                    Ok(res) if res.status().is_success() => {
+                        response = Some(res);
+                        break;
+                    }
+                    Ok(res) => {
+                        last_err = Some(BackendError::Status(res.status()));
+                    }
+                    Err(e) => {
+                        last_err = Some(BackendError::Http(e));
+                    }
+                },
+                Err(e) => {
+                    last_err = Some(e);
+                }
+            }
+        }
+
+        let response = match response {
+            Some(res) => res,
+            None => {
+                return Err(last_err.unwrap_or(BackendError::Status(StatusCode::BAD_GATEWAY)));
+            }
+        };
 
         let status = response.status();
         if !status.is_success() {
@@ -273,11 +305,33 @@ impl HttpBackend {
         }
         drop(file);
 
+        let mut mirrors = Vec::new();
+        if let Ok(u) = parse_url(ctx.job.source()) {
+            mirrors.push(MirrorCandidate {
+                url: u,
+                consecutive_failures: 0,
+                is_failed: false,
+            });
+        }
+        for m in &ctx.job.options().mirrors {
+            if let Ok(u) = Url::parse(m)
+                && !mirrors.iter().any(|existing| existing.url == u)
+            {
+                mirrors.push(MirrorCandidate {
+                    url: u,
+                    consecutive_failures: 0,
+                    is_failed: false,
+                });
+            }
+        }
+
         let shared = Arc::new(Mutex::new(SharedState {
             segments: initial,
             restart_flag: false,
             restart_count: 0,
             last_saved: Instant::now(),
+            mirrors,
+            mirror_rr: 0,
         }));
 
         loop {
@@ -367,11 +421,69 @@ impl HttpBackend {
     }
 }
 
+#[derive(Debug, Clone)]
+struct MirrorCandidate {
+    url: Url,
+    consecutive_failures: usize,
+    is_failed: bool,
+}
+
 struct SharedState {
     segments: Vec<SegmentWork>,
     restart_flag: bool,
     restart_count: u32,
     last_saved: Instant,
+    mirrors: Vec<MirrorCandidate>,
+    mirror_rr: usize,
+}
+
+impl SharedState {
+    fn next_active_url(&mut self) -> Option<Url> {
+        let total = self.mirrors.len();
+        if total == 0 {
+            return None;
+        }
+        for _ in 0..total {
+            let idx = self.mirror_rr % total;
+            self.mirror_rr = (self.mirror_rr + 1) % total;
+            if !self.mirrors[idx].is_failed {
+                return Some(self.mirrors[idx].url.clone());
+            }
+        }
+        self.mirrors
+            .iter()
+            .min_by_key(|m| m.consecutive_failures)
+            .map(|m| m.url.clone())
+    }
+
+    fn has_other_active_mirror(&self, current: &Url) -> bool {
+        self.mirrors
+            .iter()
+            .any(|m| &m.url != current && !m.is_failed)
+    }
+
+    fn mark_mirror_failure(&mut self, url: &Url) {
+        let total = self.mirrors.len();
+        for m in &mut self.mirrors {
+            if &m.url == url {
+                m.consecutive_failures += 1;
+                if m.consecutive_failures >= 1 && total > 1 {
+                    m.is_failed = true;
+                }
+                break;
+            }
+        }
+    }
+
+    fn mark_mirror_success(&mut self, url: &Url) {
+        for m in &mut self.mirrors {
+            if &m.url == url {
+                m.consecutive_failures = 0;
+                m.is_failed = false;
+                break;
+            }
+        }
+    }
 }
 
 fn save_snapshot(ctx: &JobContext, shared: &Arc<Mutex<SharedState>>) -> Result<(), BackendError> {
@@ -459,8 +571,17 @@ async fn download_segment(
             break;
         }
 
-        let url = parse_url(ctx.job.source())?;
-        let mut req = backend.request(Method::GET, url, ctx.job.options())?;
+        let (url, has_other_mirrors) = {
+            let mut s = shared.lock().unwrap_or_else(|p| p.into_inner());
+            let u = match s.next_active_url() {
+                Some(u) => u,
+                None => parse_url(ctx.job.source())?,
+            };
+            let has_other = s.has_other_active_mirror(&u);
+            (u, has_other)
+        };
+
+        let mut req = backend.request(Method::GET, url.clone(), ctx.job.options())?;
         req = req.header(RANGE, format!("bytes={curr_start}-{curr_end}"));
         if has_progress {
             if let Some(etag) = ctx.job.etag() {
@@ -473,6 +594,13 @@ async fn download_segment(
         let response = match req.send().await {
             Ok(res) => res,
             Err(err) => {
+                {
+                    let mut s = shared.lock().unwrap_or_else(|p| p.into_inner());
+                    s.mark_mirror_failure(&url);
+                }
+                if has_other_mirrors {
+                    continue;
+                }
                 if attempt < RETRY_DELAYS_SECS.len() {
                     sleep(Duration::from_secs(RETRY_DELAYS_SECS[attempt])).await;
                     attempt += 1;
@@ -484,6 +612,23 @@ async fn download_segment(
         };
 
         let status = response.status();
+        if status.is_server_error() {
+            {
+                let mut s = shared.lock().unwrap_or_else(|p| p.into_inner());
+                s.mark_mirror_failure(&url);
+            }
+            if has_other_mirrors {
+                continue;
+            }
+            if attempt < RETRY_DELAYS_SECS.len() {
+                sleep(Duration::from_secs(RETRY_DELAYS_SECS[attempt])).await;
+                attempt += 1;
+                continue;
+            } else {
+                return Err(BackendError::Status(status));
+            }
+        }
+
         if status == StatusCode::OK {
             let mut s = shared.lock().unwrap_or_else(|p| p.into_inner());
             if s.restart_count > 0 {
@@ -495,6 +640,10 @@ async fn download_segment(
         }
 
         if status == StatusCode::PARTIAL_CONTENT {
+            {
+                let mut s = shared.lock().unwrap_or_else(|p| p.into_inner());
+                s.mark_mirror_success(&url);
+            }
             let mut response = response;
             let mut stream_err = None;
 

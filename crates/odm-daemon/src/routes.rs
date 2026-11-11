@@ -80,6 +80,11 @@ pub fn job_to_detail_dto(job: &Job, store: &Store) -> DownloadDetailDto {
             },
             digest: c.expected.clone(),
         }),
+        mirrors: if job.options().mirrors.is_empty() {
+            None
+        } else {
+            Some(job.options().mirrors.clone())
+        },
     };
 
     DownloadDetailDto {
@@ -210,6 +215,9 @@ pub async fn add_download_handler(
                 },
                 expected: cs.digest.clone(),
             });
+        }
+        if let Some(ref m) = opts.mirrors {
+            options.mirrors = m.clone();
         }
     }
 

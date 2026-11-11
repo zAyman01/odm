@@ -131,10 +131,11 @@ pub fn render_add_dialog(
                                 referer: None,
                                 cookies: None,
                                 checksum: None,
+                                mirrors: None,
                             }),
                         };
 
-                        let _ = action_tx.send(UserAction::AddDownload(req));
+                        let _ = action_tx.send(UserAction::AddDownload(Box::new(req)));
                         state.close_add_dialog();
                     }
 

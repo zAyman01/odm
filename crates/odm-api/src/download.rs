@@ -19,6 +19,8 @@ pub struct JobOptionsDto {
     pub cookies: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checksum: Option<ChecksumDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mirrors: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

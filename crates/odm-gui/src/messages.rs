@@ -7,7 +7,7 @@ use odm_api::{
 /// Actions dispatched from the UI thread to the background daemon bridge.
 #[derive(Debug, Clone)]
 pub enum UserAction {
-    AddDownload(AddDownloadRequest),
+    AddDownload(Box<AddDownloadRequest>),
     Probe(String),
     Pause(i64),
     Resume(i64),

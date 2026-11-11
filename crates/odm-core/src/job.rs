@@ -127,6 +127,7 @@ pub struct JobOptions {
     pub segments: Option<u32>,
     pub speed_limit: Option<u64>,
     pub checksum: Option<crate::checksum::Checksum>,
+    pub mirrors: Vec<String>,
 }
 
 /// Metadata discovered before or while downloading.
