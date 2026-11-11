@@ -665,7 +665,7 @@ git commit -m "docs: add licenses, README and changelog"
 - Consumes: the check commands from Task 1 and `cargo deny check` from Task 2.
 - Produces: `AGENTS.md`, the rule file every later milestone's implementing agent follows.
 
-- [ ] **Step 1: Create `AGENTS.md`**
+- [x] **Step 1: Create `AGENTS.md`**
 
 ````markdown
 # Instructions for coding agents
@@ -695,7 +695,7 @@ odm is a download manager written in Rust. The design is in `docs/superpowers/sp
 12. Never push, create a repository, create a tag, publish a crate or change GitHub settings.
 ````
 
-- [ ] **Step 2: Create `CONTRIBUTING.md`**
+- [x] **Step 2: Create `CONTRIBUTING.md`**
 
 ````markdown
 # Contributing to odm
@@ -740,7 +740,7 @@ cargo deny check
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this project by you, as defined in the Apache-2.0 license, shall be dual licensed under the MIT license and the Apache License, Version 2.0, without any additional terms or conditions.
 ````
 
-- [ ] **Step 3: Download the Code of Conduct and set the contact**
+- [x] **Step 3: Download the Code of Conduct and set the contact**
 
 Do not type this file by hand.
 
@@ -757,7 +757,7 @@ Expected:
 1
 ```
 
-- [ ] **Step 4: Create `SECURITY.md`**
+- [x] **Step 4: Create `SECURITY.md`**
 
 ```markdown
 # Security Policy
@@ -780,7 +780,7 @@ Include what you found, how to reproduce it, and the version or commit you teste
 - The daemon's API is protected by a token and listens only on the local machine by default. Ways to reach the API without the token, or from a website open in the user's browser, are in scope.
 ```
 
-- [ ] **Step 5: Create the issue and pull request templates**
+- [x] **Step 5: Create the issue and pull request templates**
 
 `.github/ISSUE_TEMPLATE/bug_report.md`:
 
@@ -843,7 +843,7 @@ Closes #
 - [ ] `CHANGELOG.md` updated if a user would notice the change
 ```
 
-- [ ] **Step 6: Verify every repository file from spec section 11 exists**
+- [x] **Step 6: Verify every repository file from spec section 11 exists**
 
 Run: `for f in README.md LICENSE-MIT LICENSE-APACHE CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md CHANGELOG.md AGENTS.md deny.toml .github/ISSUE_TEMPLATE/bug_report.md .github/ISSUE_TEMPLATE/feature_request.md .github/pull_request_template.md; do test -s "$f" || echo "MISSING $f"; done; echo done`
 Expected: `done` and no `MISSING` line.
@@ -851,7 +851,7 @@ Expected: `done` and no `MISSING` line.
 Run: `cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && cargo deny check`
 Expected: no `FAILED`, no `error`, last line `advisories ok, bans ok, licenses ok, sources ok`.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add AGENTS.md CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md .github/ISSUE_TEMPLATE .github/pull_request_template.md
