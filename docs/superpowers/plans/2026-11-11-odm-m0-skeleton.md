@@ -413,17 +413,17 @@ Expected: `0`
 - Consumes: the workspace from Task 1.
 - Produces: `cargo deny check` passing locally; a CI workflow with jobs named `check` (matrix of three operating systems) and `deny`. Task 5 verifies it on GitHub.
 
-- [ ] **Step 1: Install cargo-deny**
+- [x] **Step 1: Install cargo-deny**
 
 Run: `cargo install cargo-deny --version 0.20.2 --locked`
 Expected: ends with `Installed package \`cargo-deny v0.20.2\``. Takes several minutes.
 
-- [ ] **Step 2: Run it before the config exists and watch it fail**
+- [x] **Step 2: Run it before the config exists and watch it fail**
 
 Run: `cargo deny check`
 Expected: fails; the output reports license errors for the `odm-*` crates because no license is allowed yet (or reports that no config was found, followed by the same license errors).
 
-- [ ] **Step 3: Create `deny.toml`**
+- [x] **Step 3: Create `deny.toml`**
 
 ```toml
 [graph]
@@ -446,12 +446,12 @@ unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 ```
 
-- [ ] **Step 4: Run it again and watch it pass**
+- [x] **Step 4: Run it again and watch it pass**
 
 Run: `cargo deny check`
 Expected: last line is `advisories ok, bans ok, licenses ok, sources ok`. Warnings about an allowed license that was not encountered are acceptable.
 
-- [ ] **Step 5: Create `.github/workflows/ci.yml`**
+- [x] **Step 5: Create `.github/workflows/ci.yml`**
 
 ```yaml
 name: CI
@@ -502,12 +502,12 @@ jobs:
       - uses: EmbarkStudios/cargo-deny-action@v2
 ```
 
-- [ ] **Step 6: Verify the file is valid YAML with the expected jobs**
+- [x] **Step 6: Verify the file is valid YAML with the expected jobs**
 
 Run: `grep -c -e "^  check:" -e "^  deny:" -e "ubuntu-latest, windows-latest, macos-latest" -e "--locked" .github/workflows/ci.yml; grep -c "$(printf '\t')" .github/workflows/ci.yml`
 Expected: `5` then `0` (five matching lines, no tab characters).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add deny.toml .github/workflows/ci.yml
