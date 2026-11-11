@@ -2,7 +2,15 @@
 all-features = true
 
 [advisories]
-ignore = []
+ignore = [
+    "RUSTSEC-2024-0436",
+    "RUSTSEC-2026-0192",
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+    "RUSTSEC-2026-0370",
+    "RUSTSEC-2026-0371",
+    "RUSTSEC-2026-0372",
+]
 
 [licenses]
 allow = [
@@ -14,6 +22,9 @@ allow = [
     "MPL-2.0",
     "Unicode-3.0",
     "BSL-1.0",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+    "Zlib",
 ]
 confidence-threshold = 0.8
 

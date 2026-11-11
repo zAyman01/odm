@@ -155,6 +155,14 @@ impl ViewState {
         self.add_dialog.error = None;
     }
 
+    pub fn open_settings_dialog(&mut self) {
+        self.settings_dialog.open = true;
+    }
+
+    pub fn close_settings_dialog(&mut self) {
+        self.settings_dialog.open = false;
+    }
+
     pub fn filtered_downloads(&self) -> Vec<&DownloadItemDto> {
         self.downloads
             .iter()
