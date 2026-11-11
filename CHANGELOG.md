@@ -9,3 +9,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - Workspace skeleton, CI and repository files.
+- Core job model, state machine, SQLite persistence and single-stream HTTP downloads.
