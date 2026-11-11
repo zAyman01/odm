@@ -11,8 +11,8 @@ use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use odm_core::{
-    Backend, BackendKind, ControlToken, HttpBackend, Job, JobContext, JobOptions, ProgressSink,
-    RunOutcome, Source,
+    Backend, BackendKind, ControlToken, Engine, HttpBackend, Job, JobContext, JobOptions, JobState,
+    ProgressSink, RunOutcome, Source, Store,
 };
 use tempfile::TempDir;
 use tokio::net::TcpListener;
@@ -220,4 +220,32 @@ async fn single_stream_download_writes_file_and_reports_progress() {
     let last = last.unwrap();
     assert_eq!(last.downloaded_bytes, PAYLOAD.len() as u64);
     assert_eq!(last.total_bytes, Some(PAYLOAD.len() as u64));
+}
+
+#[tokio::test]
+async fn engine_downloads_from_local_server() {
+    let server = TestServer::start().await;
+    let dir = TempDir::new().unwrap();
+    let store = Store::open_in_memory().unwrap();
+    let engine = Engine::new(store).unwrap();
+
+    let job = engine
+        .add(
+            &server.url("/file.bin"),
+            dir.path().to_path_buf(),
+            JobOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(job.state(), JobState::Queued);
+    assert!(job.id().0 > 0);
+
+    let job = engine.run(job.id()).await.unwrap();
+    assert_eq!(job.state(), JobState::Completed);
+    assert_eq!(job.downloaded_bytes(), PAYLOAD.len() as u64);
+    assert_eq!(
+        std::fs::read(dir.path().join("file.bin"))
+            .unwrap()
+            .as_slice(),
+        PAYLOAD
+    );
 }
