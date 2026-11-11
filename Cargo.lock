@@ -1025,6 +1025,14 @@ dependencies = [
 [[package]]
 name = "odm-gui"
 version = "0.1.0"
+dependencies = [
+ "directories",
+ "odm-api",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
 
 [[package]]
 name = "odm-media"
