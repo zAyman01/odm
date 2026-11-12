@@ -135,6 +135,8 @@ pub enum BackendError {
     Media(String),
     #[error("yt-dlp error: {0}")]
     YtDlp(String),
+    #[error("plugin error: {0}")]
+    Plugin(String),
     #[error("source is not supported by this backend")]
     Unsupported,
     #[error("unexpected http status: {0}")]
@@ -159,7 +161,8 @@ impl BackendError {
             | Self::Task(_)
             | Self::Unsupported
             | Self::InvalidOptions(_)
-            | Self::InvalidUrl(_) => false,
+            | Self::InvalidUrl(_)
+            | Self::Plugin(_) => false,
         }
     }
 }
