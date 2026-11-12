@@ -92,6 +92,12 @@ pub struct AddArgs {
         help = "Target upload/seed ratio override (e.g. 2.0)"
     )]
     pub seed_ratio: Option<f64>,
+
+    #[arg(
+        long,
+        help = "Quality or format identifier (e.g. 720p, 1080p, format ID)"
+    )]
+    pub quality: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]

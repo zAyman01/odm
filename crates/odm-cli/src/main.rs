@@ -87,6 +87,7 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
                 torrent_file,
                 select_files,
                 seed_ratio,
+                quality,
             } = *args;
             let mut final_urls = Vec::new();
             let mut metalink_checksum = None;
@@ -181,6 +182,7 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
                 || mirrors_opt.is_some()
                 || parsed_selected_files.is_some()
                 || seed_ratio.is_some()
+                || quality.is_some()
             {
                 Some(JobOptionsDto {
                     segments,
@@ -193,7 +195,7 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
                     mirrors: mirrors_opt,
                     selected_files: parsed_selected_files,
                     seed_ratio,
-                    ..Default::default()
+                    quality,
                 })
             } else {
                 None
