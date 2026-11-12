@@ -44,6 +44,7 @@ fn probe_response_roundtrips() {
         etag: Some("abc".to_string()),
         last_modified: None,
         torrent_files: None,
+        qualities: None,
     };
     let json = serde_json::to_string(&probe).unwrap();
     let parsed: ProbeResponse = serde_json::from_str(&json).unwrap();
@@ -112,6 +113,8 @@ fn settings_dto_and_update_roundtrips() {
         default_retry_count: 5,
         seed_ratio: 1.0,
         torrent_listen_port: 6881,
+        ffmpeg_path: String::new(),
+        ytdlp_path: String::new(),
     };
     let json = serde_json::to_string(&settings).unwrap();
     let parsed: SettingsDto = serde_json::from_str(&json).unwrap();
@@ -126,6 +129,8 @@ fn settings_dto_and_update_roundtrips() {
         default_retry_count: None,
         seed_ratio: Some(2.0),
         torrent_listen_port: Some(6882),
+        ffmpeg_path: None,
+        ytdlp_path: None,
     };
     let json_up = serde_json::to_string(&update).unwrap();
     let parsed_up: UpdateSettingsRequest = serde_json::from_str(&json_up).unwrap();

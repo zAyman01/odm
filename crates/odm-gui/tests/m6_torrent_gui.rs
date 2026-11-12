@@ -50,6 +50,7 @@ fn add_dialog_torrent_files_probed_and_selected_by_default() {
                 size: 524,
             },
         ]),
+        qualities: None,
     };
 
     state.apply_event(GuiEvent::ProbeResult(Ok(probe_resp)));
@@ -88,6 +89,7 @@ fn add_dialog_toggle_file_selection_and_seed_ratio() {
                 size: 524,
             },
         ]),
+        qualities: None,
     };
 
     state.apply_event(GuiEvent::ProbeResult(Ok(probe_resp)));

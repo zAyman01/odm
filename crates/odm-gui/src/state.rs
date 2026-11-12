@@ -271,6 +271,7 @@ impl ViewState {
             mirrors,
             selected_files,
             seed_ratio: self.add_dialog.seed_ratio,
+            ..Default::default()
         });
 
         let single = urls.len() == 1;

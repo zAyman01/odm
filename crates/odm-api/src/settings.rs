@@ -12,6 +12,10 @@ pub struct SettingsDto {
     pub seed_ratio: f64,
     #[serde(default)]
     pub torrent_listen_port: u16,
+    #[serde(default)]
+    pub ffmpeg_path: String,
+    #[serde(default)]
+    pub ytdlp_path: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -28,4 +32,8 @@ pub struct UpdateSettingsRequest {
     pub seed_ratio: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub torrent_listen_port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ffmpeg_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ytdlp_path: Option<String>,
 }

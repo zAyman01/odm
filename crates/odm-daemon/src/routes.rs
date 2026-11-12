@@ -100,6 +100,7 @@ pub fn job_to_detail_dto(job: &Job, store: &Store) -> DownloadDetailDto {
         },
         selected_files: job.options().selected_files.clone(),
         seed_ratio: job.options().seed_ratio,
+        ..Default::default()
     };
 
     DownloadDetailDto {
@@ -167,6 +168,7 @@ pub async fn probe_handler(
             etag: probe.etag,
             last_modified: probe.last_modified,
             torrent_files,
+            qualities: None,
         }));
     }
 
@@ -200,6 +202,7 @@ pub async fn probe_handler(
         etag: probe.etag,
         last_modified: probe.last_modified,
         torrent_files: None,
+        qualities: None,
     }))
 }
 
@@ -663,6 +666,8 @@ pub async fn get_settings_handler(
         default_retry_count,
         seed_ratio,
         torrent_listen_port,
+        ffmpeg_path: String::new(),
+        ytdlp_path: String::new(),
     }))
 }
 

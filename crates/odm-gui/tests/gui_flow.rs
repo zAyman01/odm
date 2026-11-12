@@ -25,6 +25,7 @@ fn full_gui_lifecycle_flow() {
         etag: Some("w/123".to_string()),
         last_modified: None,
         torrent_files: None,
+        qualities: None,
     })));
     assert_eq!(state.add_dialog.filename, "sample.tar.gz");
 

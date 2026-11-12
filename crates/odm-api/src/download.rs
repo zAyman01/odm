@@ -25,6 +25,8 @@ pub struct JobOptionsDto {
     pub selected_files: Option<Vec<u32>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seed_ratio: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

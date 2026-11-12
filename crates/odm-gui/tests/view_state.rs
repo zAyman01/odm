@@ -114,6 +114,7 @@ fn add_dialog_open_and_probe_lifecycle() {
         etag: Some("abc".to_string()),
         last_modified: None,
         torrent_files: None,
+        qualities: None,
     })));
 
     assert_eq!(state.add_dialog.filename, "probed_name.zip");

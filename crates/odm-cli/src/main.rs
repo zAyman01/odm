@@ -193,6 +193,7 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
                     mirrors: mirrors_opt,
                     selected_files: parsed_selected_files,
                     seed_ratio,
+                    ..Default::default()
                 })
             } else {
                 None

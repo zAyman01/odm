@@ -9,6 +9,19 @@ pub struct TorrentFileDto {
     pub size: u64,
 }
 
+/// A selectable quality or format from a media source.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct QualityDto {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bandwidth: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codecs: Option<String>,
+    pub label: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProbeRequest {
     pub url: String,
@@ -26,4 +39,6 @@ pub struct ProbeResponse {
     pub last_modified: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub torrent_files: Option<Vec<TorrentFileDto>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qualities: Option<Vec<QualityDto>>,
 }
