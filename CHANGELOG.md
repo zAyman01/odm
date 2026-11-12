@@ -21,3 +21,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - File categories mapping extensions to target directories with automatic file routing.
 - Queue scheduling with configurable start/stop times and active weekdays.
 - Full CLI and GUI controls for checksums, mirrors, categories, batch URLs, and schedules.
+- Torrent backend via librqbit: magnet links and .torrent files download through the same interface as HTTP.
+- Torrent file selection: choose which files to download from multi-file torrents.
+- Configurable seeding: seed to a target ratio (default 1.0), then auto-complete. Set ratio to 0 to skip seeding.
+- Torrent settings: listen port and seed ratio configurable from CLI, GUI, and API.
+- Torrent sidebar filter in GUI.
+- DHT, peer exchange, and UPnP port mapping via librqbit.
+- Torrent resume: torrents survive daemon restarts and continue where they left off.
