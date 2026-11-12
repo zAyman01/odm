@@ -46,6 +46,7 @@ async fn e2e_m5_checksums_and_mirrors_persisted() {
                 "http://mirror1.example.com/test.iso".to_string(),
                 "http://mirror2.example.com/test.iso".to_string(),
             ]),
+            ..Default::default()
         }),
     };
 

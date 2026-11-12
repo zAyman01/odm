@@ -246,6 +246,7 @@ impl ViewState {
             cookies: None,
             checksum,
             mirrors,
+            ..Default::default()
         });
 
         let single = urls.len() == 1;
@@ -322,7 +323,7 @@ impl ViewState {
             }
             GuiEvent::DownloadDetail(detail) => {
                 if self.selected_id == Some(detail.item.id) {
-                    self.selected_detail = Some(detail);
+                    self.selected_detail = Some(*detail);
                 }
             }
             GuiEvent::ProbeResult(res) => {

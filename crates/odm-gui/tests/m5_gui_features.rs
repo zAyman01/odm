@@ -19,6 +19,7 @@ fn sample_item(id: i64, state: &str, category: Option<&str>) -> DownloadItemDto 
         target_dir: "C:\\Downloads".to_string(),
         category: category.map(|s| s.to_string()),
         error: None,
+        backend: None,
     }
 }
 

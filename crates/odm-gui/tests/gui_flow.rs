@@ -24,6 +24,7 @@ fn full_gui_lifecycle_flow() {
         ranges: true,
         etag: Some("w/123".to_string()),
         last_modified: None,
+        torrent_files: None,
     })));
     assert_eq!(state.add_dialog.filename, "sample.tar.gz");
 
@@ -44,6 +45,7 @@ fn full_gui_lifecycle_flow() {
         target_dir: "C:\\Downloads".to_string(),
         category: None,
         error: None,
+        backend: None,
     };
     state.apply_event(GuiEvent::EngineEvent(Event::JobAdded(item)));
     assert_eq!(state.downloads.len(), 1);

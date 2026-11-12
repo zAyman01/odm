@@ -32,6 +32,15 @@ pub fn job_to_dto(job: &Job, store: &Store) -> DownloadItemDto {
         _ => 0.0,
     };
 
+    let backend = match job.backend() {
+        odm_core::job::BackendKind::Http => "http",
+        odm_core::job::BackendKind::Torrent => "torrent",
+        odm_core::job::BackendKind::Hls => "hls",
+        odm_core::job::BackendKind::Dash => "dash",
+        odm_core::job::BackendKind::YtDlp => "yt-dlp",
+        odm_core::job::BackendKind::Plugin => "plugin",
+    };
+
     DownloadItemDto {
         id: job.id().0,
         url: match job.source() {
@@ -49,11 +58,13 @@ pub fn job_to_dto(job: &Job, store: &Store) -> DownloadItemDto {
         target_dir: job.target_dir().to_string_lossy().to_string(),
         category: job.category().map(|s| s.to_string()),
         error: job.error().map(|e| e.message.clone()),
+        backend: Some(backend.to_string()),
     }
 }
 
 pub fn job_to_detail_dto(job: &Job, store: &Store) -> DownloadDetailDto {
     let item = job_to_dto(job, store);
+    let backend = item.backend.clone();
     let segments = store
         .list_segments(job.id())
         .unwrap_or_default()
@@ -87,12 +98,15 @@ pub fn job_to_detail_dto(job: &Job, store: &Store) -> DownloadDetailDto {
         } else {
             Some(job.options().mirrors.clone())
         },
+        selected_files: job.options().selected_files.clone(),
+        seed_ratio: job.options().seed_ratio,
     };
 
     DownloadDetailDto {
         item,
         segments,
         options,
+        backend,
     }
 }
 
@@ -104,8 +118,58 @@ pub async fn health_handler() -> impl IntoResponse {
 }
 
 pub async fn probe_handler(
+    State(state): State<AppState>,
     Json(req): Json<ProbeRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    if req.url.starts_with("magnet:") || req.url.ends_with(".torrent") {
+        let torrent = state.torrent.as_ref().ok_or_else(|| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse::new(
+                    "torrent_disabled",
+                    "Torrent backend is not configured",
+                )),
+            )
+        })?;
+
+        let source = if req.url.starts_with("magnet:") {
+            Source::Magnet(req.url.clone())
+        } else {
+            Source::TorrentFile(PathBuf::from(&req.url))
+        };
+
+        let probe = torrent
+            .probe(&source, &JobOptions::default())
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse::new("probe_failed", e.to_string())),
+                )
+            })?;
+
+        let files = torrent.probe_torrent_files(&source).await.ok();
+        let torrent_files = files.map(|fs| {
+            fs.into_iter()
+                .map(|f| odm_api::TorrentFileDto {
+                    index: f.index,
+                    path: f.path,
+                    size: f.size,
+                })
+                .collect()
+        });
+
+        return Ok(Json(ProbeResponse {
+            backend: "torrent".to_string(),
+            filename: probe.filename,
+            size: probe.total_bytes,
+            ranges: probe.supports_ranges,
+            etag: probe.etag,
+            last_modified: probe.last_modified,
+            torrent_files,
+        }));
+    }
+
     let backend = HttpBackend::new().map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -135,6 +199,7 @@ pub async fn probe_handler(
         ranges: probe.supports_ranges,
         etag: probe.etag,
         last_modified: probe.last_modified,
+        torrent_files: None,
     }))
 }
 
@@ -282,6 +347,12 @@ pub async fn add_download_handler(
         if let Some(ref m) = opts.mirrors {
             options.mirrors = m.clone();
         }
+        if let Some(ref sf) = opts.selected_files {
+            options.selected_files = Some(sf.clone());
+        }
+        if let Some(sr) = opts.seed_ratio {
+            options.seed_ratio = Some(sr);
+        }
     }
 
     let queue_name = req.queue.unwrap_or_else(|| "default".to_string());
@@ -298,9 +369,17 @@ pub async fn add_download_handler(
         },
     };
 
+    let source = if req.url.starts_with("magnet:") {
+        Source::Magnet(req.url.clone())
+    } else if req.url.ends_with(".torrent") || std::path::Path::new(&req.url).is_file() {
+        Source::TorrentFile(PathBuf::from(&req.url))
+    } else {
+        Source::Url(req.url.clone())
+    };
+
     let mut job = state
         .engine
-        .add(&req.url, target_dir, options)
+        .add_download(source, target_dir, options)
         .map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
@@ -564,12 +643,26 @@ pub async fn get_settings_handler(
         .flatten()
         .and_then(|s| s.parse().ok())
         .unwrap_or(5);
+    let seed_ratio = store
+        .get_setting("seed_ratio")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0.0);
+    let torrent_listen_port = store
+        .get_setting("torrent_listen_port")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
 
     Ok(Json(SettingsDto {
         download_dir,
         default_segments,
         global_speed_limit,
         default_retry_count,
+        seed_ratio,
+        torrent_listen_port,
     }))
 }
 
@@ -589,6 +682,12 @@ pub async fn update_settings_handler(
     }
     if let Some(r) = req.default_retry_count {
         let _ = store.set_setting("default_retry_count", &r.to_string());
+    }
+    if let Some(sr) = req.seed_ratio {
+        let _ = store.set_setting("seed_ratio", &sr.to_string());
+    }
+    if let Some(port) = req.torrent_listen_port {
+        let _ = store.set_setting("torrent_listen_port", &port.to_string());
     }
 
     get_settings_handler(State(state)).await

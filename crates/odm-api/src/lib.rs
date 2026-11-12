@@ -21,7 +21,7 @@ pub use download::{
 pub use error::{ErrorDetail, ErrorResponse};
 pub use event::{Event, WsAuthRequest, WsAuthResponse};
 pub use health::HealthResponse;
-pub use probe::{ProbeRequest, ProbeResponse};
+pub use probe::{ProbeRequest, ProbeResponse, TorrentFileDto};
 pub use queue::{
     CreateQueueRequest, ListQueuesResponse, QueueDto, QueueScheduleDto, UpdateQueueRequest,
 };

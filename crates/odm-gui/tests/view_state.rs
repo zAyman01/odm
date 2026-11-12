@@ -19,6 +19,7 @@ fn sample_item(id: i64, state: &str, queue: &str) -> DownloadItemDto {
         target_dir: "C:\\Downloads".to_string(),
         category: None,
         error: None,
+        backend: None,
     }
 }
 
@@ -112,6 +113,7 @@ fn add_dialog_open_and_probe_lifecycle() {
         ranges: true,
         etag: Some("abc".to_string()),
         last_modified: None,
+        torrent_files: None,
     })));
 
     assert_eq!(state.add_dialog.filename, "probed_name.zip");

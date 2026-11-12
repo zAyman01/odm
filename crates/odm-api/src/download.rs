@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::checksum::ChecksumDto;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct JobOptionsDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub segments: Option<u32>,
@@ -21,9 +21,13 @@ pub struct JobOptionsDto {
     pub checksum: Option<ChecksumDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mirrors: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_files: Option<Vec<u32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed_ratio: Option<f64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AddDownloadRequest {
     pub url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -59,6 +63,8 @@ pub struct DownloadItemDto {
     pub category: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -75,6 +81,8 @@ pub struct DownloadDetailDto {
     pub item: DownloadItemDto,
     pub segments: Vec<SegmentDto>,
     pub options: JobOptionsDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

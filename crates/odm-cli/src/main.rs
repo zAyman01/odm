@@ -165,6 +165,7 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
                     cookies: None,
                     checksum: parsed_checksum,
                     mirrors: mirrors_opt,
+                    ..Default::default()
                 })
             } else {
                 None

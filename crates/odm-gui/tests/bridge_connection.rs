@@ -46,6 +46,7 @@ async fn bridge_connects_syncs_downloads_and_forwards_events() {
                         target_dir: "/tmp".to_string(),
                         category: None,
                         error: None,
+                        backend: None,
                     }],
                 })
             }),

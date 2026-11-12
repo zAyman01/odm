@@ -42,7 +42,7 @@ pub enum GuiEvent {
     DownloadsList(Vec<DownloadItemDto>),
     CategoriesList(Vec<CategoryDto>),
     QueuesList(Vec<QueueDto>),
-    DownloadDetail(DownloadDetailDto),
+    DownloadDetail(Box<DownloadDetailDto>),
     ProbeResult(Result<ProbeResponse, String>),
     EngineEvent(Event),
     ErrorMessage(String),

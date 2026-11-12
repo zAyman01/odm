@@ -3,6 +3,8 @@
 
 pub mod state;
 
+pub use librqbit;
+
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;

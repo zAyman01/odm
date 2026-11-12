@@ -43,6 +43,7 @@ fn probe_response_roundtrips() {
         ranges: true,
         etag: Some("abc".to_string()),
         last_modified: None,
+        torrent_files: None,
     };
     let json = serde_json::to_string(&probe).unwrap();
     let parsed: ProbeResponse = serde_json::from_str(&json).unwrap();
@@ -90,6 +91,7 @@ fn download_item_dto_and_list() {
         target_dir: "/tmp".to_string(),
         category: None,
         error: None,
+        backend: Some("http".to_string()),
     };
     let list = ListDownloadsResponse {
         downloads: vec![item],
@@ -108,16 +110,22 @@ fn settings_dto_and_update_roundtrips() {
         default_segments: 8,
         global_speed_limit: 0,
         default_retry_count: 5,
+        seed_ratio: 1.0,
+        torrent_listen_port: 6881,
     };
     let json = serde_json::to_string(&settings).unwrap();
     let parsed: SettingsDto = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed.default_segments, 8);
+    assert_eq!(parsed.seed_ratio, 1.0);
+    assert_eq!(parsed.torrent_listen_port, 6881);
 
     let update = UpdateSettingsRequest {
         download_dir: None,
         default_segments: Some(16),
         global_speed_limit: None,
         default_retry_count: None,
+        seed_ratio: Some(2.0),
+        torrent_listen_port: Some(6882),
     };
     let json_up = serde_json::to_string(&update).unwrap();
     let parsed_up: UpdateSettingsRequest = serde_json::from_str(&json_up).unwrap();

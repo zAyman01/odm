@@ -106,6 +106,7 @@ pub fn render_settings_dialog(
                                         Some(state.settings_dialog.global_speed_limit)
                                     },
                                     default_retry_count: None,
+                                    ..Default::default()
                                 };
 
                                 let _ = action_tx.send(UserAction::UpdateSettings(update));
