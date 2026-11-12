@@ -7,5 +7,20 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[dependencies]
+async-trait = "0.1.92"
+librqbit = "9.1.0"
+odm-core = { path = "../odm-core" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["sync", "time", "macros"] }
+tracing = "0.1.44"
+
+[dev-dependencies]
+sha2 = "0.10.8"
+tempfile = "3.27.0"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "test-util", "macros"] }
+
 [lints]
 workspace = true
