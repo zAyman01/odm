@@ -33,50 +33,71 @@ pub struct Cli {
     pub command: Command,
 }
 
+#[derive(clap::Args, Debug, Clone)]
+pub struct AddArgs {
+    #[arg(
+        required_unless_present = "torrent_file",
+        help = "One or more URLs to download"
+    )]
+    pub urls: Vec<String>,
+
+    #[arg(short = 'd', long = "dir", help = "Target download directory")]
+    pub dir: Option<String>,
+
+    #[arg(
+        short = 'o',
+        long = "output",
+        help = "Custom filename (only for single URL)"
+    )]
+    pub output: Option<String>,
+
+    #[arg(short = 's', long = "segments", help = "Number of segments (1-32)")]
+    pub segments: Option<u32>,
+
+    #[arg(short = 'l', long = "limit", help = "Speed limit in bytes/sec")]
+    pub limit: Option<u64>,
+
+    #[arg(short = 'q', long = "queue", help = "Target queue name")]
+    pub queue: Option<String>,
+
+    #[arg(short = 'H', long = "header", help = "Custom header 'Key: Value'")]
+    pub headers: Vec<String>,
+
+    #[arg(
+        long = "checksum",
+        help = "Checksum in algo:digest format (e.g. sha256:...)"
+    )]
+    pub checksum: Option<String>,
+
+    #[arg(long = "mirror", help = "Mirror download URL")]
+    pub mirror: Vec<String>,
+
+    #[arg(long = "metalink", help = "Path to .metalink or .meta4 file")]
+    pub metalink: Option<String>,
+
+    #[arg(long = "category", help = "Category name")]
+    pub category: Option<String>,
+
+    #[arg(long = "torrent-file", help = "Path to a .torrent file to download")]
+    pub torrent_file: Option<String>,
+
+    #[arg(
+        long = "select-files",
+        help = "Comma-separated indices of files to download (e.g. 0,1,3)"
+    )]
+    pub select_files: Option<String>,
+
+    #[arg(
+        long = "seed-ratio",
+        help = "Target upload/seed ratio override (e.g. 2.0)"
+    )]
+    pub seed_ratio: Option<f64>,
+}
+
 #[derive(Subcommand, Debug)]
 pub enum Command {
     #[command(about = "Add one or more downloads")]
-    Add {
-        #[arg(required = true, help = "One or more URLs to download")]
-        urls: Vec<String>,
-
-        #[arg(short = 'd', long = "dir", help = "Target download directory")]
-        dir: Option<String>,
-
-        #[arg(
-            short = 'o',
-            long = "output",
-            help = "Custom filename (only for single URL)"
-        )]
-        output: Option<String>,
-
-        #[arg(short = 's', long = "segments", help = "Number of segments (1-32)")]
-        segments: Option<u32>,
-
-        #[arg(short = 'l', long = "limit", help = "Speed limit in bytes/sec")]
-        limit: Option<u64>,
-
-        #[arg(short = 'q', long = "queue", help = "Target queue name")]
-        queue: Option<String>,
-
-        #[arg(short = 'H', long = "header", help = "Custom header 'Key: Value'")]
-        headers: Vec<String>,
-
-        #[arg(
-            long = "checksum",
-            help = "Checksum in algo:digest format (e.g. sha256:...)"
-        )]
-        checksum: Option<String>,
-
-        #[arg(long = "mirror", help = "Mirror download URL")]
-        mirror: Vec<String>,
-
-        #[arg(long = "metalink", help = "Path to .metalink or .meta4 file")]
-        metalink: Option<String>,
-
-        #[arg(long = "category", help = "Category name")]
-        category: Option<String>,
-    },
+    Add(Box<AddArgs>),
 
     #[command(about = "List downloads")]
     List {

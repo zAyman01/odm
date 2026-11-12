@@ -6,7 +6,7 @@ mod commands;
 mod format;
 
 use clap::Parser;
-use commands::{CategoryCommand, Cli, Command, DaemonCommand, QueueCommand};
+use commands::{AddArgs, CategoryCommand, Cli, Command, DaemonCommand, QueueCommand};
 use odm_api::{AddDownloadRequest, ChecksumAlgorithm, ChecksumDto, JobOptionsDto};
 
 use crate::client::DaemonClient;
@@ -71,22 +71,30 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
             }
         },
 
-        Command::Add {
-            urls,
-            dir,
-            output,
-            segments,
-            limit,
-            queue,
-            headers,
-            checksum,
-            mirror,
-            metalink,
-            category,
-        } => {
+        Command::Add(args) => {
+            let AddArgs {
+                urls,
+                dir,
+                output,
+                segments,
+                limit,
+                queue,
+                headers,
+                checksum,
+                mirror,
+                metalink,
+                category,
+                torrent_file,
+                select_files,
+                seed_ratio,
+            } = *args;
             let mut final_urls = Vec::new();
             let mut metalink_checksum = None;
             let mut all_mirrors = mirror;
+
+            if let Some(torrent_path) = torrent_file {
+                final_urls.push(torrent_path);
+            }
 
             if let Some(metalink_path) = metalink {
                 let xml = std::fs::read_to_string(&metalink_path)
@@ -150,11 +158,29 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
                 Some(all_mirrors)
             };
 
+            let parsed_selected_files = if let Some(sf) = select_files {
+                let mut indices = Vec::new();
+                for part in sf.split(',') {
+                    let trimmed = part.trim();
+                    if !trimmed.is_empty() {
+                        let idx: u32 = trimmed
+                            .parse()
+                            .map_err(|e| format!("Invalid file index '{trimmed}': {e}"))?;
+                        indices.push(idx);
+                    }
+                }
+                Some(indices)
+            } else {
+                None
+            };
+
             let options = if segments.is_some()
                 || limit.is_some()
                 || parsed_headers.is_some()
                 || parsed_checksum.is_some()
                 || mirrors_opt.is_some()
+                || parsed_selected_files.is_some()
+                || seed_ratio.is_some()
             {
                 Some(JobOptionsDto {
                     segments,
@@ -165,7 +191,8 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
                     cookies: None,
                     checksum: parsed_checksum,
                     mirrors: mirrors_opt,
-                    ..Default::default()
+                    selected_files: parsed_selected_files,
+                    seed_ratio,
                 })
             } else {
                 None
