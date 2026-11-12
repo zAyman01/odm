@@ -168,6 +168,10 @@ impl DaemonBridge {
                         }
                     }
 
+                    UserAction::SelectQuality(_) => {
+                        // Handled in local GUI state
+                    }
+
                     UserAction::Pause(id) => {
                         let url = format!("{server_url_clone}/api/v1/downloads/{id}/pause");
                         let mut req = client.post(&url);

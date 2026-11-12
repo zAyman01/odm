@@ -102,6 +102,41 @@ pub fn render_add_dialog(
                     });
                 }
 
+                if !state.add_dialog.qualities.is_empty() {
+                    ui.group(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Quality:");
+                            let selected_label = state
+                                .add_dialog
+                                .qualities
+                                .iter()
+                                .find(|q| Some(&q.id) == state.add_dialog.selected_quality.as_ref())
+                                .map(|q| q.label.as_str())
+                                .unwrap_or("Select quality");
+
+                            let mut new_quality = None;
+                            egui::ComboBox::from_id_salt("add_quality_select")
+                                .selected_text(selected_label)
+                                .show_ui(ui, |ui| {
+                                    for q in &state.add_dialog.qualities {
+                                        let is_selected =
+                                            state.add_dialog.selected_quality.as_deref()
+                                                == Some(&q.id);
+                                        if ui.selectable_label(is_selected, &q.label).clicked() {
+                                            new_quality = Some(q.id.clone());
+                                        }
+                                    }
+                                });
+
+                            if let Some(quality_id) = new_quality {
+                                let _ =
+                                    action_tx.send(UserAction::SelectQuality(quality_id.clone()));
+                                state.handle_action(&UserAction::SelectQuality(quality_id));
+                            }
+                        });
+                    });
+                }
+
                 if let Some(ref err) = state.add_dialog.error {
                     ui.colored_label(
                         egui::Color32::from_rgb(231, 76, 60),

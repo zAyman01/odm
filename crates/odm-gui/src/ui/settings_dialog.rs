@@ -4,7 +4,6 @@ use crate::desktop::ClipboardWatcher;
 use crate::messages::UserAction;
 use crate::state::{SettingsTab, ThemeMode, ViewState};
 use eframe::egui;
-use odm_api::UpdateSettingsRequest;
 use tokio::sync::mpsc;
 
 pub fn render_settings_dialog(
@@ -67,6 +66,16 @@ pub fn render_settings_dialog(
                             ));
                         });
 
+                        ui.horizontal(|ui| {
+                            ui.label("FFmpeg path:");
+                            ui.text_edit_singleline(&mut state.settings_dialog.ffmpeg_path);
+                        });
+
+                        ui.horizontal(|ui| {
+                            ui.label("yt-dlp path:");
+                            ui.text_edit_singleline(&mut state.settings_dialog.ytdlp_path);
+                        });
+
                         ui.checkbox(
                             &mut state.settings_dialog.clipboard_monitoring,
                             "Automatically capture download URLs from clipboard",
@@ -91,23 +100,7 @@ pub fn render_settings_dialog(
 
                         ui.horizontal(|ui| {
                             if ui.button("Save").clicked() {
-                                let update = UpdateSettingsRequest {
-                                    download_dir: if state.settings_dialog.download_dir.is_empty() {
-                                        None
-                                    } else {
-                                        Some(state.settings_dialog.download_dir.clone())
-                                    },
-                                    default_segments: Some(state.settings_dialog.default_segments),
-                                    global_speed_limit: if state.settings_dialog.global_speed_limit
-                                        == 0
-                                    {
-                                        None
-                                    } else {
-                                        Some(state.settings_dialog.global_speed_limit)
-                                    },
-                                    default_retry_count: None,
-                                    ..Default::default()
-                                };
+                                let update = state.settings_dialog.build_update_settings_request();
 
                                 let _ = action_tx.send(UserAction::UpdateSettings(update));
                                 state.theme = state.settings_dialog.theme;

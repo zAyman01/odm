@@ -9,6 +9,7 @@ use odm_api::{
 pub enum UserAction {
     AddDownload(Box<AddDownloadRequest>),
     Probe(String),
+    SelectQuality(String),
     Pause(i64),
     Resume(i64),
     Cancel(i64),

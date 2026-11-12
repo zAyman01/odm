@@ -1,5 +1,8 @@
 //! View-state models and pure reducer functions for the odm GUI.
-use odm_api::{DownloadDetailDto, DownloadItemDto, Event, ProbeResponse, TorrentFileDto};
+use odm_api::{
+    DownloadDetailDto, DownloadItemDto, Event, ProbeResponse, QualityDto, TorrentFileDto,
+    UpdateSettingsRequest,
+};
 
 use crate::messages::GuiEvent;
 
@@ -42,6 +45,8 @@ pub struct AddDialogState {
     pub torrent_files: Vec<TorrentFileDto>,
     pub selected_file_indices: std::collections::HashSet<u32>,
     pub seed_ratio: Option<f64>,
+    pub qualities: Vec<QualityDto>,
+    pub selected_quality: Option<String>,
 }
 
 impl Default for AddDialogState {
@@ -69,6 +74,8 @@ impl Default for AddDialogState {
             torrent_files: Vec::new(),
             selected_file_indices: std::collections::HashSet::new(),
             seed_ratio: None,
+            qualities: Vec::new(),
+            selected_quality: None,
         }
     }
 }
@@ -87,6 +94,8 @@ pub struct SettingsDialogState {
     pub queue_stop_time: String,
     pub queue_days: String,
     pub category_dirs: std::collections::HashMap<String, String>,
+    pub ffmpeg_path: String,
+    pub ytdlp_path: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -116,6 +125,49 @@ impl Default for SettingsDialogState {
             queue_stop_time: String::new(),
             queue_days: String::new(),
             category_dirs: std::collections::HashMap::new(),
+            ffmpeg_path: String::new(),
+            ytdlp_path: String::new(),
+        }
+    }
+}
+
+impl SettingsDialogState {
+    pub fn load_settings(&mut self, settings: &odm_api::SettingsDto) {
+        if let Some(ref dir) = settings.download_dir {
+            self.download_dir = dir.clone();
+        }
+        self.default_segments = settings.default_segments;
+        self.global_speed_limit = settings.global_speed_limit;
+        self.ffmpeg_path = settings.ffmpeg_path.clone();
+        self.ytdlp_path = settings.ytdlp_path.clone();
+    }
+
+    pub fn build_update_settings_request(&self) -> UpdateSettingsRequest {
+        UpdateSettingsRequest {
+            download_dir: if self.download_dir.is_empty() {
+                None
+            } else {
+                Some(self.download_dir.clone())
+            },
+            default_segments: Some(self.default_segments),
+            global_speed_limit: if self.global_speed_limit == 0 {
+                None
+            } else {
+                Some(self.global_speed_limit)
+            },
+            default_retry_count: None,
+            seed_ratio: None,
+            torrent_listen_port: None,
+            ffmpeg_path: if self.ffmpeg_path.is_empty() {
+                None
+            } else {
+                Some(self.ffmpeg_path.clone())
+            },
+            ytdlp_path: if self.ytdlp_path.is_empty() {
+                None
+            } else {
+                Some(self.ytdlp_path.clone())
+            },
         }
     }
 }
@@ -177,6 +229,8 @@ impl ViewState {
         self.add_dialog.torrent_files.clear();
         self.add_dialog.selected_file_indices.clear();
         self.add_dialog.seed_ratio = None;
+        self.add_dialog.qualities.clear();
+        self.add_dialog.selected_quality = None;
 
         if let Some(url) = prefill_url {
             self.update_add_dialog_url(url);
@@ -271,7 +325,7 @@ impl ViewState {
             mirrors,
             selected_files,
             seed_ratio: self.add_dialog.seed_ratio,
-            ..Default::default()
+            quality: self.add_dialog.selected_quality.clone(),
         });
 
         let single = urls.len() == 1;
@@ -295,6 +349,20 @@ impl ViewState {
             .collect()
     }
 
+    pub fn build_add_request(&self) -> Option<odm_api::AddDownloadRequest> {
+        self.build_add_download_requests().into_iter().next()
+    }
+
+    pub fn build_update_settings_request(&self) -> UpdateSettingsRequest {
+        self.settings_dialog.build_update_settings_request()
+    }
+
+    pub fn handle_action(&mut self, action: &crate::messages::UserAction) {
+        if let crate::messages::UserAction::SelectQuality(id) = action {
+            self.add_dialog.selected_quality = Some(id.clone());
+        }
+    }
+
     pub fn close_add_dialog(&mut self) {
         self.add_dialog.open = false;
         self.add_dialog.url.clear();
@@ -308,6 +376,8 @@ impl ViewState {
         self.add_dialog.torrent_files.clear();
         self.add_dialog.selected_file_indices.clear();
         self.add_dialog.seed_ratio = None;
+        self.add_dialog.qualities.clear();
+        self.add_dialog.selected_quality = None;
     }
 
     pub fn open_settings_dialog(&mut self) {
@@ -367,6 +437,11 @@ impl ViewState {
                             self.add_dialog.torrent_files = files.clone();
                             self.add_dialog.selected_file_indices =
                                 files.iter().map(|f| f.index).collect();
+                        }
+                        if let Some(ref qualities) = probe.qualities {
+                            self.add_dialog.qualities = qualities.clone();
+                            self.add_dialog.selected_quality =
+                                qualities.first().map(|q| q.id.clone());
                         }
                         self.add_dialog.probed = Some(probe);
                     }
@@ -452,5 +527,17 @@ impl ViewState {
                 self.open_add_dialog(Some(url));
             }
         }
+    }
+}
+
+pub fn backend_display(backend: Option<&str>) -> &str {
+    match backend {
+        Some("hls") => "HLS",
+        Some("dash") => "DASH",
+        Some("yt-dlp") | Some("ytdlp") => "yt-dlp",
+        Some("torrent") => "Torrent",
+        Some("http") => "HTTP",
+        Some(other) => other,
+        None => "HTTP",
     }
 }
