@@ -6,8 +6,9 @@ use odm_core::{Engine, JobId};
 use odm_media::dash::DashBackend;
 use odm_media::hls::HlsBackend;
 use odm_media::ytdlp::YtDlpBackend;
+use odm_plugin::{PluginBackend, PluginRegistry};
 use odm_torrent::TorrentBackend;
-use tokio::sync::Semaphore;
+use tokio::sync::{RwLock, Semaphore};
 
 use crate::config::DaemonConfig;
 
@@ -19,11 +20,20 @@ pub struct AppState {
     pub hls: Option<Arc<HlsBackend>>,
     pub dash: Option<Arc<DashBackend>>,
     pub ytdlp: Option<Arc<YtDlpBackend>>,
+    pub plugins: Arc<RwLock<PluginRegistry>>,
     semaphores: Arc<Mutex<HashMap<String, Arc<Semaphore>>>>,
 }
 
 impl AppState {
     pub fn new(engine: Engine, config: DaemonConfig) -> Self {
+        let plugins_dir = config.data_dir.join("plugins");
+        let _ = std::fs::create_dir_all(&plugins_dir);
+        let mut registry = PluginRegistry::new(plugins_dir);
+        let _ = registry.discover();
+        let plugins = Arc::new(RwLock::new(registry));
+        let plugin_backend = Arc::new(PluginBackend::new(plugins.clone()));
+        engine.register_backend(plugin_backend);
+
         Self {
             engine,
             config,
@@ -31,8 +41,14 @@ impl AppState {
             hls: None,
             dash: None,
             ytdlp: None,
+            plugins,
             semaphores: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    pub fn with_plugins(mut self, plugins: Arc<RwLock<PluginRegistry>>) -> Self {
+        self.plugins = plugins;
+        self
     }
 
     pub fn with_torrent(mut self, torrent: Arc<TorrentBackend>) -> Self {

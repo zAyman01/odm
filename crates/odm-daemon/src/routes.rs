@@ -8,9 +8,9 @@ use axum::response::IntoResponse;
 use odm_api::{
     AddDownloadRequest, AddDownloadResponse, CategoryDto, ChecksumDto, CreateQueueRequest,
     DownloadDetailDto, DownloadItemDto, ErrorResponse, HealthResponse, JobOptionsDto,
-    ListCategoriesResponse, ListDownloadsResponse, ListQueuesResponse, ProbeRequest, ProbeResponse,
-    QueueDto, SegmentDto, SetCategoryRequest, SettingsDto, UpdateQueueRequest,
-    UpdateSettingsRequest,
+    ListCategoriesResponse, ListDownloadsResponse, ListQueuesResponse, PluginDto,
+    PluginListResponse, ProbeRequest, ProbeResponse, QueueDto, SegmentDto, SetCategoryRequest,
+    SettingsDto, UpdateQueueRequest, UpdateSettingsRequest,
 };
 use odm_core::{Backend, HttpBackend, Job, JobId, JobOptions, Source, Store};
 use serde::Deserialize;
@@ -168,6 +168,47 @@ pub async fn probe_handler(
             etag: probe.etag,
             last_modified: probe.last_modified,
             torrent_files,
+            qualities: None,
+        }));
+    }
+
+    let is_plugin = {
+        let plugins = state.plugins.read().await;
+        plugins.find_for_url(&req.url).is_some()
+    };
+
+    if is_plugin {
+        let plugin = state
+            .engine
+            .get_backend(odm_core::job::BackendKind::Plugin)
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse::new("backend_error", e.to_string())),
+                )
+            })?;
+
+        let source = Source::Url(req.url.clone());
+        let opts = JobOptions {
+            user_agent: req.user_agent.clone(),
+            ..Default::default()
+        };
+
+        let probe = plugin.probe(&source, &opts).await.map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::new("probe_failed", e.to_string())),
+            )
+        })?;
+
+        return Ok(Json(ProbeResponse {
+            backend: "plugin".to_string(),
+            filename: probe.filename,
+            size: probe.total_bytes,
+            ranges: probe.supports_ranges,
+            etag: probe.etag,
+            last_modified: probe.last_modified,
+            torrent_files: None,
             qualities: None,
         }));
     }
@@ -492,6 +533,14 @@ pub async fn add_download_handler(
         Source::Url(req.url.clone())
     };
 
+    let is_torrent = matches!(source, Source::Magnet(_) | Source::TorrentFile(_));
+    let is_plugin = if !is_torrent {
+        let plugins = state.plugins.read().await;
+        plugins.find_for_url(&req.url).is_some()
+    } else {
+        false
+    };
+
     let mut job = state
         .engine
         .add_download(source, target_dir, options)
@@ -501,6 +550,10 @@ pub async fn add_download_handler(
                 Json(ErrorResponse::new("add_failed", e.to_string())),
             )
         })?;
+
+    if is_plugin {
+        job.set_backend(odm_core::job::BackendKind::Plugin);
+    }
 
     if let Some(fname) = req.filename {
         job.set_filename(fname);
@@ -883,4 +936,23 @@ pub async fn delete_category_handler(
     })?;
 
     Ok(StatusCode::OK)
+}
+
+pub async fn get_plugins_handler(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    let plugins = state.plugins.read().await.list();
+    let dtos: Vec<PluginDto> = plugins
+        .into_iter()
+        .map(|p| PluginDto {
+            name: p.name,
+            version: p.version,
+            description: p.description,
+            role: p.role,
+            url_patterns: p.url_patterns,
+            command: p.command,
+        })
+        .collect();
+
+    Ok(Json(PluginListResponse { plugins: dtos }))
 }

@@ -63,6 +63,26 @@ pub type MediaBackends = (
     Option<Arc<YtDlpBackend>>,
 );
 
+/// Initializes plugin backend and discovers installed plugins in `<data_dir>/plugins`.
+pub fn init_plugin_backend(
+    data_dir: &std::path::Path,
+    engine: &Engine,
+) -> (
+    Arc<tokio::sync::RwLock<odm_plugin::PluginRegistry>>,
+    Arc<odm_plugin::PluginBackend>,
+) {
+    let plugins_dir = data_dir.join("plugins");
+    let _ = std::fs::create_dir_all(&plugins_dir);
+    let mut registry = odm_plugin::PluginRegistry::new(plugins_dir);
+    if let Err(e) = registry.discover() {
+        tracing::warn!("Failed to discover plugins: {e}");
+    }
+    let registry = Arc::new(tokio::sync::RwLock::new(registry));
+    let backend = Arc::new(odm_plugin::PluginBackend::new(registry.clone()));
+    engine.register_backend(backend.clone());
+    (registry, backend)
+}
+
 /// Initializes media backends (HLS, DASH, yt-dlp) based on settings and registers them with the engine.
 pub fn init_media_backends(store: &Store, engine: &Engine) -> MediaBackends {
     let client = odm_media::reqwest::Client::builder()
@@ -113,6 +133,7 @@ pub fn build_router_with_state(state: AppState) -> Router {
     let api_routes = Router::new()
         .route("/health", get(health_handler))
         .route("/probe", post(probe_handler))
+        .route("/plugins", get(get_plugins_handler))
         .route(
             "/downloads",
             get(list_downloads_handler).post(add_download_handler),
@@ -157,7 +178,8 @@ pub fn build_router_with_state(state: AppState) -> Router {
 pub fn build_router(config: DaemonConfig) -> Result<Router, Box<dyn std::error::Error>> {
     let store = Store::open_in_memory()?;
     let engine = Engine::new(store.clone())?;
-    let mut state = AppState::new(engine.clone(), config);
+    let (plugins, _) = init_plugin_backend(&config.data_dir, &engine);
+    let mut state = AppState::new(engine.clone(), config).with_plugins(plugins);
     let (hls, dash, ytdlp) = init_media_backends(&store, &engine);
     if let Some(h) = hls {
         state = state.with_hls(h);

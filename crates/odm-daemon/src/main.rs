@@ -63,6 +63,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let scheduler = std::sync::Arc::new(odm_daemon::scheduler::Scheduler::new(engine.clone()));
     let _scheduler_handle = scheduler.start();
     let mut state = AppState::new(engine.clone(), config.clone());
+    let (plugins, _) = odm_daemon::server::init_plugin_backend(&config.data_dir, &engine);
+    state = state.with_plugins(plugins);
     if let Some(t) = torrent {
         state = state.with_torrent(t);
     }

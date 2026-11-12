@@ -4138,6 +4138,7 @@ dependencies = [
  "odm-api",
  "odm-core",
  "odm-media",
+ "odm-plugin",
  "odm-torrent",
  "reqwest",
  "serde",
