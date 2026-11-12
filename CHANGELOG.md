@@ -28,3 +28,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Torrent sidebar filter in GUI.
 - DHT, peer exchange, and UPnP port mapping via librqbit.
 - Torrent resume: torrents survive daemon restarts and continue where they left off.
+- HLS backend: download HLS streams from `.m3u8` playlists with quality selection and AES-128 decryption.
+- DASH backend: download DASH streams from `.mpd` manifests with audio+video muxing via ffmpeg.
+- yt-dlp backend: download from any yt-dlp-supported site with format selection and progress tracking.
+- Quality/format selection: probe returns available qualities for HLS, DASH and yt-dlp sources; select via CLI `--quality` flag or GUI dropdown.
+- ffmpeg integration: optional muxing of HLS `.ts` to `.mp4`; required for DASH audio+video muxing.
+- yt-dlp integration: external binary found from settings or PATH; clear error message when missing.
+- Media resume: HLS/DASH downloads resume from saved segment progress after pause or restart.
+- yt-dlp pause/resume: pause kills the process; resume reruns with `--continue`.
+- Settings: `ffmpeg_path` and `ytdlp_path` configurable from CLI, GUI and API.
