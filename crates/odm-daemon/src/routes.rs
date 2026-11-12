@@ -7,12 +7,14 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use odm_api::{
     AddDownloadRequest, AddDownloadResponse, CategoryDto, ChecksumDto, CreateQueueRequest,
-    DownloadDetailDto, DownloadItemDto, ErrorResponse, HealthResponse, JobOptionsDto,
-    ListCategoriesResponse, ListDownloadsResponse, ListQueuesResponse, PluginDto,
-    PluginListResponse, ProbeRequest, ProbeResponse, QueueDto, SegmentDto, SetCategoryRequest,
-    SettingsDto, UpdateQueueRequest, UpdateSettingsRequest,
+    DownloadDetailDto, DownloadItemDto, ErrorResponse, GrabbedFileDto, GrabberRequest,
+    GrabberResponse, HealthResponse, JobOptionsDto, ListCategoriesResponse, ListDownloadsResponse,
+    ListQueuesResponse, PluginDto, PluginListResponse, ProbeRequest, ProbeResponse, QueueDto,
+    SegmentDto, SetCategoryRequest, SettingsDto, UpdateQueueRequest, UpdateSettingsRequest,
 };
+use odm_core::grabber::{GrabberConfig, SiteGrabber};
 use odm_core::{Backend, HttpBackend, Job, JobId, JobOptions, Source, Store};
+use odm_media::url::Url;
 use serde::Deserialize;
 
 use crate::state::AppState;
@@ -955,4 +957,52 @@ pub async fn get_plugins_handler(
         .collect();
 
     Ok(Json(PluginListResponse { plugins: dtos }))
+}
+
+pub async fn grabber_handler(
+    State(state): State<AppState>,
+    Json(req): Json<GrabberRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    let start_url = Url::parse(&req.url).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::new(
+                "bad_request",
+                format!("invalid start url: {e}"),
+            )),
+        )
+    })?;
+
+    let config = GrabberConfig {
+        start_url,
+        depth_limit: req.depth.unwrap_or(1),
+        extensions: req.extensions.unwrap_or_default(),
+        pattern: req.pattern,
+        respect_robots_txt: req.respect_robots.unwrap_or(true),
+        max_pages: req.max_pages.unwrap_or(50),
+    };
+
+    let grabber = SiteGrabber::new(config);
+    let result = grabber.crawl(&state.http_client).await.map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::new("grabber_failed", e.to_string())),
+        )
+    })?;
+
+    let files = result
+        .files
+        .into_iter()
+        .map(|f| GrabbedFileDto {
+            url: f.url.to_string(),
+            filename: f.filename,
+            found_on: f.found_on.to_string(),
+            depth: f.depth,
+        })
+        .collect();
+
+    Ok(Json(GrabberResponse {
+        files,
+        pages_crawled: result.pages_crawled,
+    }))
 }

@@ -134,6 +134,7 @@ pub fn build_router_with_state(state: AppState) -> Router {
         .route("/health", get(health_handler))
         .route("/probe", post(probe_handler))
         .route("/plugins", get(get_plugins_handler))
+        .route("/grabber", post(grabber_handler))
         .route(
             "/downloads",
             get(list_downloads_handler).post(add_download_handler),
