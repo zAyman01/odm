@@ -130,6 +130,7 @@ pub struct JobOptions {
     pub mirrors: Vec<String>,
     pub selected_files: Option<Vec<u32>>,
     pub seed_ratio: Option<f64>,
+    pub quality: Option<String>,
 }
 
 /// Metadata discovered before or while downloading.

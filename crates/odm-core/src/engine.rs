@@ -93,7 +93,11 @@ impl Engine {
                 if !matches!(url.scheme(), "http" | "https") {
                     return Err(EngineError::InvalidUrl(url.to_string()));
                 }
-                BackendKind::Http
+                match url.path().rsplit('.').next() {
+                    Some("m3u8") => BackendKind::Hls,
+                    Some("mpd") => BackendKind::Dash,
+                    _ => BackendKind::Http,
+                }
             }
             Source::Magnet(_) | Source::TorrentFile(_) => BackendKind::Torrent,
         };

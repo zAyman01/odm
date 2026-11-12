@@ -131,6 +131,10 @@ pub enum BackendError {
     Task(String),
     #[error("torrent error: {0}")]
     Torrent(String),
+    #[error("media error: {0}")]
+    Media(String),
+    #[error("yt-dlp error: {0}")]
+    YtDlp(String),
     #[error("source is not supported by this backend")]
     Unsupported,
     #[error("unexpected http status: {0}")]
@@ -145,7 +149,7 @@ impl BackendError {
     /// Returns whether retrying the same request may succeed.
     pub fn is_retryable(&self) -> bool {
         match self {
-            Self::Http(_) | Self::Torrent(_) => true,
+            Self::Http(_) | Self::Torrent(_) | Self::Media(_) | Self::YtDlp(_) => true,
             Self::Status(status) => {
                 matches!(status.as_u16(), 408 | 429) || status.is_server_error()
             }
