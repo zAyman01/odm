@@ -129,6 +129,8 @@ pub enum BackendError {
     RangeIgnored,
     #[error("worker task failed: {0}")]
     Task(String),
+    #[error("torrent error: {0}")]
+    Torrent(String),
     #[error("source is not supported by this backend")]
     Unsupported,
     #[error("unexpected http status: {0}")]
@@ -143,7 +145,7 @@ impl BackendError {
     /// Returns whether retrying the same request may succeed.
     pub fn is_retryable(&self) -> bool {
         match self {
-            Self::Http(_) => true,
+            Self::Http(_) | Self::Torrent(_) => true,
             Self::Status(status) => {
                 matches!(status.as_u16(), 408 | 429) || status.is_server_error()
             }

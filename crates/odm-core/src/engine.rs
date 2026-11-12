@@ -33,7 +33,7 @@ impl Drop for ControlGuard {
 #[derive(Clone)]
 pub struct Engine {
     store: Store,
-    backend: HttpBackend,
+    backends: Arc<Mutex<HashMap<BackendKind, Arc<dyn Backend>>>>,
     limiter: Arc<TokenBucket>,
     controls: Arc<Mutex<HashMap<JobId, ControlHandle>>>,
     events: broadcast::Sender<Event>,
@@ -43,9 +43,12 @@ impl Engine {
     pub fn new(store: Store) -> Result<Self, EngineError> {
         store.recover_interrupted()?;
         let (events, _) = broadcast::channel(1024);
+        let http_backend = Arc::new(HttpBackend::new()?);
+        let mut backends = HashMap::new();
+        backends.insert(BackendKind::Http, http_backend as Arc<dyn Backend>);
         Ok(Self {
             store,
-            backend: HttpBackend::new()?,
+            backends: Arc::new(Mutex::new(backends)),
             limiter: Arc::new(TokenBucket::unlimited()),
             controls: Arc::new(Mutex::new(HashMap::new())),
             events,
@@ -64,6 +67,44 @@ impl Engine {
         self.events.clone()
     }
 
+    /// Registers a backend implementation for its kind.
+    pub fn register_backend(&self, backend: Arc<dyn Backend>) {
+        let mut map = self.backends.lock().unwrap_or_else(|p| p.into_inner());
+        map.insert(backend.kind(), backend);
+    }
+
+    /// Returns the registered backend for a given kind.
+    pub fn get_backend(&self, kind: BackendKind) -> Result<Arc<dyn Backend>, EngineError> {
+        let map = self.backends.lock().unwrap_or_else(|p| p.into_inner());
+        map.get(&kind).cloned().ok_or(EngineError::NoBackend(kind))
+    }
+
+    /// Adds a download job of any supported source kind to the store.
+    pub fn add_download(
+        &self,
+        source: Source,
+        target_dir: PathBuf,
+        options: JobOptions,
+    ) -> Result<Job, EngineError> {
+        let backend_kind = match &source {
+            Source::Url(url_str) => {
+                let url = Url::parse(url_str)
+                    .map_err(|error| EngineError::InvalidUrl(error.to_string()))?;
+                if !matches!(url.scheme(), "http" | "https") {
+                    return Err(EngineError::InvalidUrl(url.to_string()));
+                }
+                BackendKind::Http
+            }
+            Source::Magnet(_) | Source::TorrentFile(_) => BackendKind::Torrent,
+        };
+
+        let mut job = Job::new(source, target_dir, options);
+        job.set_backend(backend_kind);
+        self.store.insert_job(&mut job)?;
+        let _ = self.events.send(Event::JobAdded(job.id()));
+        Ok(job)
+    }
+
     /// Adds an HTTP job to the store.
     pub fn add(
         &self,
@@ -71,16 +112,7 @@ impl Engine {
         target_dir: PathBuf,
         options: JobOptions,
     ) -> Result<Job, EngineError> {
-        let url = Url::parse(url).map_err(|error| EngineError::InvalidUrl(error.to_string()))?;
-        if !matches!(url.scheme(), "http" | "https") {
-            return Err(EngineError::InvalidUrl(url.to_string()));
-        }
-
-        let mut job = Job::new(Source::Url(url.to_string()), target_dir, options);
-        job.set_backend(BackendKind::Http);
-        self.store.insert_job(&mut job)?;
-        let _ = self.events.send(Event::JobAdded(job.id()));
-        Ok(job)
+        self.add_download(Source::Url(url.to_string()), target_dir, options)
     }
 
     /// Removes a job from the store, cancels it if running, and optionally deletes the file.
@@ -165,7 +197,8 @@ impl Engine {
                 state: JobState::Probing,
             });
 
-            let probe = match self.backend.probe(job.source(), job.options()).await {
+            let backend = self.get_backend(job.backend())?;
+            let probe = match backend.probe(job.source(), job.options()).await {
                 Ok(probe) => probe,
                 Err(error) => {
                     job.set_error(error.to_string(), error.is_retryable());
@@ -260,7 +293,8 @@ impl Engine {
             final_bytes
         });
 
-        let outcome = match self.backend.run(context).await {
+        let backend = self.get_backend(job.backend())?;
+        let outcome = match backend.run(context).await {
             Ok(outcome) => outcome,
             Err(error) => {
                 let _ = progress_task.await;
@@ -398,6 +432,8 @@ pub enum EngineError {
     InvalidState(JobState),
     #[error("job {0:?} is not currently running")]
     NotRunning(JobId),
+    #[error("no backend registered for {0:?}")]
+    NoBackend(BackendKind),
 }
 
 fn resolve_filename_conflict(
