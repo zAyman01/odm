@@ -1,8 +1,10 @@
 //! HLS (HTTP Live Streaming) backend for odm.
 #![forbid(unsafe_code)]
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
+use aes::cipher::{BlockModeDecrypt, KeyIvInit, block_padding::Pkcs7};
 use async_trait::async_trait;
 use odm_core::backend::{Backend, BackendError, JobContext, RunOutcome};
 use odm_core::job::{BackendKind, JobOptions, ProbeResult, Source};
@@ -14,6 +16,50 @@ use url::Url;
 use crate::mux;
 use crate::quality::QualityInfo;
 use crate::state::HlsResumeState;
+
+type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
+
+fn decrypt_segment(data: &[u8], key: &[u8; 16], iv: &[u8; 16]) -> Result<Vec<u8>, BackendError> {
+    let cipher = Aes128CbcDec::new(key.into(), iv.into());
+    cipher
+        .decrypt_padded_vec::<Pkcs7>(data)
+        .map_err(|e| BackendError::Media(format!("AES decryption failed: {e}")))
+}
+
+fn derive_iv(media_sequence: u64, segment_index: u64) -> [u8; 16] {
+    let seq = media_sequence + segment_index;
+    let mut iv = [0u8; 16];
+    iv[8..16].copy_from_slice(&seq.to_be_bytes());
+    iv
+}
+
+fn parse_iv(iv_str: &str) -> Result<[u8; 16], BackendError> {
+    let clean = iv_str.trim();
+    let hex_str = clean
+        .strip_prefix("0x")
+        .or_else(|| clean.strip_prefix("0X"))
+        .unwrap_or(clean);
+
+    if hex_str.len() <= 32 && hex_str.chars().all(|c| c.is_ascii_hexdigit()) {
+        let padded = format!("{:0>32}", hex_str);
+        let mut iv = [0u8; 16];
+        for (i, chunk) in padded.as_bytes().as_chunks::<2>().0.iter().enumerate() {
+            let s = std::str::from_utf8(chunk)
+                .map_err(|e| BackendError::Media(format!("invalid IV hex: {e}")))?;
+            iv[i] = u8::from_str_radix(s, 16)
+                .map_err(|e| BackendError::Media(format!("invalid IV hex: {e}")))?;
+        }
+        return Ok(iv);
+    }
+
+    if clean.len() == 16 {
+        let mut iv = [0u8; 16];
+        iv.copy_from_slice(clean.as_bytes());
+        return Ok(iv);
+    }
+
+    Err(BackendError::Media(format!("invalid IV format: {iv_str}")))
+}
 
 /// Backend implementation for HLS streams (`.m3u8`).
 pub struct HlsBackend {
@@ -258,8 +304,16 @@ impl Backend for HlsBackend {
         let mut downloaded_bytes = file.metadata().await?.len();
         ctx.progress.report(downloaded_bytes, ctx.job.total_bytes());
 
+        let mut key_cache: HashMap<String, [u8; 16]> = HashMap::new();
+        let mut active_key: Option<m3u8_rs::Key> = None;
+
         for (idx, seg) in media.segments.iter().enumerate() {
             let seg_idx = idx as u32;
+
+            if let Some(ref k) = seg.key {
+                active_key = Some(k.clone());
+            }
+
             if resume_state.completed_segments.contains(&seg_idx) {
                 continue;
             }
@@ -292,10 +346,74 @@ impl Backend for HlsBackend {
             let chunk = seg_res.bytes().await?;
 
             ctx.limiter.acquire(chunk.len() as u64).await;
-            file.write_all(&chunk).await?;
+
+            let data_to_write = if let Some(ref key_tag) = active_key {
+                match key_tag.method {
+                    m3u8_rs::KeyMethod::None => chunk.to_vec(),
+                    m3u8_rs::KeyMethod::AES128 => {
+                        let key_uri_str = key_tag.uri.as_deref().ok_or_else(|| {
+                            BackendError::Media("AES-128 key missing URI".to_string())
+                        })?;
+                        let key_url = media_url
+                            .join(key_uri_str)
+                            .map_err(|e| BackendError::InvalidUrl(e.to_string()))?;
+
+                        let key = if let Some(cached) = key_cache.get(key_url.as_str()) {
+                            *cached
+                        } else {
+                            let mut key_req = self.client.get(key_url.clone());
+                            key_req = apply_options(key_req, ctx.job.options());
+                            let key_res = key_req.send().await.map_err(|e| {
+                                BackendError::Media(format!("failed to fetch encryption key: {e}"))
+                            })?;
+                            if !key_res.status().is_success() {
+                                return Err(BackendError::Media(format!(
+                                    "failed to fetch encryption key from {key_url}: HTTP {}",
+                                    key_res.status()
+                                )));
+                            }
+                            let key_bytes = key_res.bytes().await.map_err(|e| {
+                                BackendError::Media(format!("failed to read encryption key: {e}"))
+                            })?;
+                            if key_bytes.len() != 16 {
+                                return Err(BackendError::Media(format!(
+                                    "encryption key from {key_url} must be 16 bytes, got {}",
+                                    key_bytes.len()
+                                )));
+                            }
+                            let mut k = [0u8; 16];
+                            k.copy_from_slice(&key_bytes);
+                            key_cache.insert(key_url.to_string(), k);
+                            k
+                        };
+
+                        let iv = if let Some(ref iv_str) = key_tag.iv {
+                            parse_iv(iv_str)?
+                        } else {
+                            derive_iv(media.media_sequence, idx as u64)
+                        };
+
+                        decrypt_segment(&chunk, &key, &iv)?
+                    }
+                    m3u8_rs::KeyMethod::SampleAES => {
+                        return Err(BackendError::Media(
+                            "SAMPLE-AES DRM streams are not supported".to_string(),
+                        ));
+                    }
+                    ref other => {
+                        return Err(BackendError::Media(format!(
+                            "unsupported encryption method: {other:?}"
+                        )));
+                    }
+                }
+            } else {
+                chunk.to_vec()
+            };
+
+            file.write_all(&data_to_write).await?;
             file.flush().await?;
 
-            downloaded_bytes += chunk.len() as u64;
+            downloaded_bytes += data_to_write.len() as u64;
             ctx.progress.report(downloaded_bytes, ctx.job.total_bytes());
 
             resume_state.completed_segments.push(seg_idx);
