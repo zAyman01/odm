@@ -6,7 +6,9 @@ pub mod checksum;
 pub mod download;
 pub mod error;
 pub mod event;
+pub mod grabber;
 pub mod health;
+pub mod plugin;
 pub mod probe;
 pub mod queue;
 pub mod settings;
@@ -20,7 +22,9 @@ pub use download::{
 };
 pub use error::{ErrorDetail, ErrorResponse};
 pub use event::{Event, WsAuthRequest, WsAuthResponse};
+pub use grabber::{GrabbedFileDto, GrabberRequest, GrabberResponse};
 pub use health::HealthResponse;
+pub use plugin::{PluginDto, PluginListResponse};
 pub use probe::{ProbeRequest, ProbeResponse, QualityDto, TorrentFileDto};
 pub use queue::{
     CreateQueueRequest, ListQueuesResponse, QueueDto, QueueScheduleDto, UpdateQueueRequest,
