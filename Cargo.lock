@@ -4064,6 +4064,7 @@ dependencies = [
  "futures-util",
  "odm-api",
  "odm-core",
+ "odm-media",
  "odm-torrent",
  "reqwest",
  "serde",

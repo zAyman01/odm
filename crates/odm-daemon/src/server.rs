@@ -1,14 +1,110 @@
 //! HTTP and WebSocket server construction and routing.
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use axum::Router;
 use axum::middleware::{from_fn, from_fn_with_state};
 use axum::routing::{get, post};
 use odm_core::{Engine, Store};
+use odm_media::dash::DashBackend;
+use odm_media::hls::HlsBackend;
+use odm_media::ytdlp::YtDlpBackend;
 
 use crate::auth::{create_cors_layer, require_bearer_token, validate_host_header};
 use crate::config::DaemonConfig;
 use crate::routes::*;
 use crate::state::AppState;
 use crate::ws::ws_handler;
+
+/// Locate yt-dlp binary: checks `settings_path` if non-empty, otherwise searches `PATH`.
+pub fn find_ytdlp(settings_path: &str) -> Option<PathBuf> {
+    let trimmed = settings_path.trim();
+    if !trimmed.is_empty() {
+        let path = PathBuf::from(trimmed);
+        if path.is_file() {
+            return Some(path);
+        }
+        #[cfg(windows)]
+        {
+            for ext in ["exe", "bat", "cmd"] {
+                let with_ext = path.with_extension(ext);
+                if with_ext.is_file() {
+                    return Some(with_ext);
+                }
+            }
+        }
+        return None;
+    }
+
+    if let Some(paths) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            let candidate = dir.join("yt-dlp");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+            #[cfg(windows)]
+            {
+                for ext in ["exe", "bat", "cmd"] {
+                    let candidate_ext = dir.join(format!("yt-dlp.{ext}"));
+                    if candidate_ext.is_file() {
+                        return Some(candidate_ext);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+pub type MediaBackends = (
+    Option<Arc<HlsBackend>>,
+    Option<Arc<DashBackend>>,
+    Option<Arc<YtDlpBackend>>,
+);
+
+/// Initializes media backends (HLS, DASH, yt-dlp) based on settings and registers them with the engine.
+pub fn init_media_backends(store: &Store, engine: &Engine) -> MediaBackends {
+    let client = odm_media::reqwest::Client::builder()
+        .user_agent(concat!("odm/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .unwrap_or_default();
+
+    let ffmpeg_setting = store
+        .get_setting("ffmpeg_path")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let ytdlp_setting = store
+        .get_setting("ytdlp_path")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+
+    let ffmpeg_path = odm_media::mux::find_ffmpeg(&ffmpeg_setting);
+    let ytdlp_path = find_ytdlp(&ytdlp_setting);
+
+    let hls = Arc::new(HlsBackend::new(client.clone(), ffmpeg_path.clone()));
+    engine.register_backend(hls.clone());
+
+    let dash = if let Some(ref ff) = ffmpeg_path {
+        let backend = Arc::new(DashBackend::new(client.clone(), Some(ff.clone())));
+        engine.register_backend(backend.clone());
+        Some(backend)
+    } else {
+        None
+    };
+
+    let ytdlp = if let Some(yt) = ytdlp_path {
+        let backend = Arc::new(YtDlpBackend::new(yt));
+        engine.register_backend(backend.clone());
+        Some(backend)
+    } else {
+        None
+    };
+
+    (Some(hls), dash, ytdlp)
+}
 
 /// Builds the Axum router for the daemon given the application state.
 pub fn build_router_with_state(state: AppState) -> Router {
@@ -60,7 +156,17 @@ pub fn build_router_with_state(state: AppState) -> Router {
 /// Builds the Axum router for testing from configuration.
 pub fn build_router(config: DaemonConfig) -> Result<Router, Box<dyn std::error::Error>> {
     let store = Store::open_in_memory()?;
-    let engine = Engine::new(store)?;
-    let state = AppState::new(engine, config);
+    let engine = Engine::new(store.clone())?;
+    let mut state = AppState::new(engine.clone(), config);
+    let (hls, dash, ytdlp) = init_media_backends(&store, &engine);
+    if let Some(h) = hls {
+        state = state.with_hls(h);
+    }
+    if let Some(d) = dash {
+        state = state.with_dash(d);
+    }
+    if let Some(y) = ytdlp {
+        state = state.with_ytdlp(y);
+    }
     Ok(build_router_with_state(state))
 }

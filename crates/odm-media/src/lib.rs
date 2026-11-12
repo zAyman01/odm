@@ -10,4 +10,6 @@ pub mod ytdlp;
 
 pub use dash::DashBackend;
 pub use hls::HlsBackend;
+pub use reqwest;
+pub use url;
 pub use ytdlp::YtDlpBackend;

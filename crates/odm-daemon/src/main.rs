@@ -62,9 +62,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let scheduler = std::sync::Arc::new(odm_daemon::scheduler::Scheduler::new(engine.clone()));
     let _scheduler_handle = scheduler.start();
-    let mut state = AppState::new(engine, config.clone());
+    let mut state = AppState::new(engine.clone(), config.clone());
     if let Some(t) = torrent {
         state = state.with_torrent(t);
+    }
+    let (hls, dash, ytdlp) = odm_daemon::server::init_media_backends(&store, &engine);
+    if let Some(h) = hls {
+        state = state.with_hls(h);
+    }
+    if let Some(d) = dash {
+        state = state.with_dash(d);
+    }
+    if let Some(y) = ytdlp {
+        state = state.with_ytdlp(y);
     }
 
     let app = build_router_with_state(state);

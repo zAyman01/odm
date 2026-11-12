@@ -100,7 +100,7 @@ pub fn job_to_detail_dto(job: &Job, store: &Store) -> DownloadDetailDto {
         },
         selected_files: job.options().selected_files.clone(),
         seed_ratio: job.options().seed_ratio,
-        ..Default::default()
+        quality: job.options().quality.clone(),
     };
 
     DownloadDetailDto {
@@ -169,6 +169,115 @@ pub async fn probe_handler(
             last_modified: probe.last_modified,
             torrent_files,
             qualities: None,
+        }));
+    }
+
+    let parsed_url = odm_media::url::Url::parse(&req.url).ok();
+    let is_m3u8 = parsed_url
+        .as_ref()
+        .and_then(|u| u.path().rsplit('.').next())
+        .map(|ext| ext.eq_ignore_ascii_case("m3u8"))
+        .unwrap_or_else(|| req.url.ends_with(".m3u8") || req.url.contains(".m3u8?"));
+
+    let is_mpd = parsed_url
+        .as_ref()
+        .and_then(|u| u.path().rsplit('.').next())
+        .map(|ext| ext.eq_ignore_ascii_case("mpd"))
+        .unwrap_or_else(|| req.url.ends_with(".mpd") || req.url.contains(".mpd?"));
+
+    if is_m3u8 {
+        let hls = state.hls.as_ref().ok_or_else(|| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse::new(
+                    "hls_disabled",
+                    "HLS backend is not configured",
+                )),
+            )
+        })?;
+
+        let source = Source::Url(req.url.clone());
+        let opts = JobOptions {
+            user_agent: req.user_agent,
+            ..Default::default()
+        };
+
+        let probe = hls.probe(&source, &opts).await.map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::new("probe_failed", e.to_string())),
+            )
+        })?;
+
+        let qualities = hls.probe_qualities(&source).await.ok().map(|qs| {
+            qs.into_iter()
+                .map(|q| odm_api::QualityDto {
+                    id: q.id,
+                    resolution: q.resolution,
+                    bandwidth: q.bandwidth,
+                    codecs: q.codecs,
+                    label: q.label,
+                })
+                .collect()
+        });
+
+        return Ok(Json(ProbeResponse {
+            backend: "hls".to_string(),
+            filename: probe.filename,
+            size: probe.total_bytes,
+            ranges: probe.supports_ranges,
+            etag: probe.etag,
+            last_modified: probe.last_modified,
+            torrent_files: None,
+            qualities,
+        }));
+    }
+
+    if is_mpd {
+        let dash = state.dash.as_ref().ok_or_else(|| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse::new(
+                    "dash_disabled",
+                    "DASH backend is not configured",
+                )),
+            )
+        })?;
+
+        let source = Source::Url(req.url.clone());
+        let opts = JobOptions {
+            user_agent: req.user_agent,
+            ..Default::default()
+        };
+
+        let probe = dash.probe(&source, &opts).await.map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::new("probe_failed", e.to_string())),
+            )
+        })?;
+
+        let qualities = dash.probe_qualities(&source).await.ok().map(|qs| {
+            qs.into_iter()
+                .map(|q| odm_api::QualityDto {
+                    id: q.id,
+                    resolution: q.resolution,
+                    bandwidth: q.bandwidth,
+                    codecs: q.codecs,
+                    label: q.label,
+                })
+                .collect()
+        });
+
+        return Ok(Json(ProbeResponse {
+            backend: "dash".to_string(),
+            filename: probe.filename,
+            size: probe.total_bytes,
+            ranges: probe.supports_ranges,
+            etag: probe.etag,
+            last_modified: probe.last_modified,
+            torrent_files: None,
+            qualities,
         }));
     }
 
@@ -355,6 +464,9 @@ pub async fn add_download_handler(
         }
         if let Some(sr) = opts.seed_ratio {
             options.seed_ratio = Some(sr);
+        }
+        if let Some(ref q) = opts.quality {
+            options.quality = Some(q.clone());
         }
     }
 
@@ -658,6 +770,16 @@ pub async fn get_settings_handler(
         .flatten()
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
+    let ffmpeg_path = store
+        .get_setting("ffmpeg_path")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let ytdlp_path = store
+        .get_setting("ytdlp_path")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
 
     Ok(Json(SettingsDto {
         download_dir,
@@ -666,8 +788,8 @@ pub async fn get_settings_handler(
         default_retry_count,
         seed_ratio,
         torrent_listen_port,
-        ffmpeg_path: String::new(),
-        ytdlp_path: String::new(),
+        ffmpeg_path,
+        ytdlp_path,
     }))
 }
 
@@ -693,6 +815,12 @@ pub async fn update_settings_handler(
     }
     if let Some(port) = req.torrent_listen_port {
         let _ = store.set_setting("torrent_listen_port", &port.to_string());
+    }
+    if let Some(ref p) = req.ffmpeg_path {
+        let _ = store.set_setting("ffmpeg_path", p);
+    }
+    if let Some(ref p) = req.ytdlp_path {
+        let _ = store.set_setting("ytdlp_path", p);
     }
 
     get_settings_handler(State(state)).await
