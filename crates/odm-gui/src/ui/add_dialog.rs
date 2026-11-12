@@ -71,6 +71,37 @@ pub fn render_add_dialog(
                     });
                 }
 
+                if !state.add_dialog.torrent_files.is_empty() {
+                    ui.group(|ui| {
+                        ui.label(egui::RichText::new("Torrent Files:").strong());
+                        egui::ScrollArea::vertical()
+                            .max_height(120.0)
+                            .show(ui, |ui| {
+                                for file in &state.add_dialog.torrent_files {
+                                    let mut selected = state
+                                        .add_dialog
+                                        .selected_file_indices
+                                        .contains(&file.index);
+                                    let label =
+                                        format!("{} ({})", file.path, format_bytes(file.size));
+                                    if ui.checkbox(&mut selected, label).changed() {
+                                        if selected {
+                                            state
+                                                .add_dialog
+                                                .selected_file_indices
+                                                .insert(file.index);
+                                        } else {
+                                            state
+                                                .add_dialog
+                                                .selected_file_indices
+                                                .remove(&file.index);
+                                        }
+                                    }
+                                }
+                            });
+                    });
+                }
+
                 if let Some(ref err) = state.add_dialog.error {
                     ui.colored_label(
                         egui::Color32::from_rgb(231, 76, 60),
@@ -177,6 +208,25 @@ pub fn render_add_dialog(
                         &mut state.add_dialog.speed_limit,
                         0..=50_000_000,
                     ));
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("Seed ratio (0.0 = unlimited/global):");
+                    let mut ratio_val = state.add_dialog.seed_ratio.unwrap_or(0.0);
+                    if ui
+                        .add(
+                            egui::DragValue::new(&mut ratio_val)
+                                .speed(0.1)
+                                .range(0.0..=100.0),
+                        )
+                        .changed()
+                    {
+                        state.add_dialog.seed_ratio = if ratio_val > 0.0 {
+                            Some(ratio_val)
+                        } else {
+                            None
+                        };
+                    }
                 });
 
                 ui.add_space(8.0);

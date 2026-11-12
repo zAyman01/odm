@@ -30,6 +30,18 @@ pub fn render_detail_panel(ui: &mut egui::Ui, state: &mut ViewState) {
             ui.label(format!("Queue: {}", item.queue));
         });
 
+        if item.backend.as_deref() == Some("torrent") {
+            ui.horizontal(|ui| {
+                ui.label(format!("Backend: Torrent | State: {}", item.state));
+                if let Some(ref detail) = state.selected_detail
+                    && let Some(sr) = detail.options.seed_ratio
+                {
+                    ui.separator();
+                    ui.label(format!("Target Seed Ratio: {sr:.1}"));
+                }
+            });
+        }
+
         if let Some(ref err) = item.error {
             ui.colored_label(
                 egui::Color32::from_rgb(231, 76, 60),

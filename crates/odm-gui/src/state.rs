@@ -1,5 +1,5 @@
 //! View-state models and pure reducer functions for the odm GUI.
-use odm_api::{DownloadDetailDto, DownloadItemDto, Event, ProbeResponse};
+use odm_api::{DownloadDetailDto, DownloadItemDto, Event, ProbeResponse, TorrentFileDto};
 
 use crate::messages::GuiEvent;
 
@@ -9,6 +9,7 @@ pub enum Filter {
     All,
     Active,
     Completed,
+    Torrents,
     Queue(String),
     Category(String),
 }
@@ -38,6 +39,9 @@ pub struct AddDialogState {
     pub mirrors: String,
     pub category: Option<String>,
     pub batch_preview: Vec<String>,
+    pub torrent_files: Vec<TorrentFileDto>,
+    pub selected_file_indices: std::collections::HashSet<u32>,
+    pub seed_ratio: Option<f64>,
 }
 
 impl Default for AddDialogState {
@@ -62,6 +66,9 @@ impl Default for AddDialogState {
             mirrors: String::new(),
             category: None,
             batch_preview: Vec::new(),
+            torrent_files: Vec::new(),
+            selected_file_indices: std::collections::HashSet::new(),
+            seed_ratio: None,
         }
     }
 }
@@ -167,6 +174,9 @@ impl ViewState {
         self.add_dialog.mirrors.clear();
         self.add_dialog.category = None;
         self.add_dialog.batch_preview.clear();
+        self.add_dialog.torrent_files.clear();
+        self.add_dialog.selected_file_indices.clear();
+        self.add_dialog.seed_ratio = None;
 
         if let Some(url) = prefill_url {
             self.update_add_dialog_url(url);
@@ -233,6 +243,19 @@ impl ViewState {
             None
         };
 
+        let selected_files = if !self.add_dialog.torrent_files.is_empty() {
+            let mut indices: Vec<u32> = self
+                .add_dialog
+                .selected_file_indices
+                .iter()
+                .copied()
+                .collect();
+            indices.sort_unstable();
+            Some(indices)
+        } else {
+            None
+        };
+
         let options = Some(odm_api::JobOptionsDto {
             segments: Some(self.add_dialog.segments),
             speed_limit: if self.add_dialog.speed_limit == 0 {
@@ -246,7 +269,8 @@ impl ViewState {
             cookies: None,
             checksum,
             mirrors,
-            ..Default::default()
+            selected_files,
+            seed_ratio: self.add_dialog.seed_ratio,
         });
 
         let single = urls.len() == 1;
@@ -280,6 +304,9 @@ impl ViewState {
         self.add_dialog.mirrors.clear();
         self.add_dialog.category = None;
         self.add_dialog.batch_preview.clear();
+        self.add_dialog.torrent_files.clear();
+        self.add_dialog.selected_file_indices.clear();
+        self.add_dialog.seed_ratio = None;
     }
 
     pub fn open_settings_dialog(&mut self) {
@@ -299,8 +326,10 @@ impl ViewState {
                     item.state == "downloading"
                         || item.state == "connecting"
                         || item.state == "pending"
+                        || item.state == "seeding"
                 }
                 Filter::Completed => item.state == "completed",
+                Filter::Torrents => item.backend.as_deref() == Some("torrent"),
                 Filter::Queue(ref q) => &item.queue == q,
                 Filter::Category(ref cat) => item.category.as_deref() == Some(cat.as_str()),
             })
@@ -332,6 +361,11 @@ impl ViewState {
                     Ok(probe) => {
                         if !probe.filename.is_empty() {
                             self.add_dialog.filename = probe.filename.clone();
+                        }
+                        if let Some(ref files) = probe.torrent_files {
+                            self.add_dialog.torrent_files = files.clone();
+                            self.add_dialog.selected_file_indices =
+                                files.iter().map(|f| f.index).collect();
                         }
                         self.add_dialog.probed = Some(probe);
                     }

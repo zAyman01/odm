@@ -19,6 +19,11 @@ pub fn render_sidebar(ui: &mut egui::Ui, state: &mut ViewState) {
             .iter()
             .filter(|d| d.state == "completed")
             .count();
+        let torrent_count = state
+            .downloads
+            .iter()
+            .filter(|d| d.backend.as_deref() == Some("torrent"))
+            .count();
 
         if ui
             .selectable_label(
@@ -48,6 +53,16 @@ pub fn render_sidebar(ui: &mut egui::Ui, state: &mut ViewState) {
             .clicked()
         {
             state.filter = Filter::Completed;
+        }
+
+        if ui
+            .selectable_label(
+                state.filter == Filter::Torrents,
+                format!("🧲 Torrents ({torrent_count})"),
+            )
+            .clicked()
+        {
+            state.filter = Filter::Torrents;
         }
 
         ui.separator();
