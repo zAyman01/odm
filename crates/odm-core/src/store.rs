@@ -71,12 +71,17 @@ ALTER TABLE queues ADD COLUMN schedule_stop TEXT;
 ALTER TABLE queues ADD COLUMN schedule_days TEXT;
 ";
 
+const MIGRATION_6: &str = "
+ALTER TABLE jobs ADD COLUMN backend_state TEXT;
+";
+
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, MIGRATION_1),
     (2, MIGRATION_2),
     (3, MIGRATION_3),
     (4, MIGRATION_4),
     (5, MIGRATION_5),
+    (6, MIGRATION_6),
 ];
 
 const MIGRATION_2: &str = "
@@ -102,7 +107,7 @@ CREATE TABLE segments (
 const JOB_COLUMNS: &str = "
 id, source_json, filename, target_dir, state, queue_id, position, backend, total_bytes,
 downloaded_bytes, supports_ranges, etag, last_modified, content_type, error_message,
-error_retryable, options_json, created_at, updated_at, category
+error_retryable, options_json, created_at, updated_at, category, backend_state
 ";
 
 /// A SQLite-backed job repository.
@@ -161,8 +166,8 @@ impl Store {
             "INSERT INTO jobs (
                 source_json, filename, target_dir, state, queue_id, position, backend,
                 total_bytes, downloaded_bytes, supports_ranges, etag, last_modified, content_type,
-                error_message, error_retryable, options_json, created_at, updated_at, category
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                error_message, error_retryable, options_json, created_at, updated_at, category, backend_state
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
             params![
                 source_json,
                 record.filename,
@@ -183,6 +188,7 @@ impl Store {
                 record.created_at,
                 record.updated_at,
                 record.category,
+                record.backend_state,
             ],
         )?;
 
@@ -223,7 +229,7 @@ impl Store {
                 position = ?7, backend = ?8, total_bytes = ?9, downloaded_bytes = ?10,
                 supports_ranges = ?11, etag = ?12, last_modified = ?13, content_type = ?14,
                 error_message = ?15, error_retryable = ?16, options_json = ?17,
-                created_at = ?18, updated_at = ?19, category = ?20
+                created_at = ?18, updated_at = ?19, category = ?20, backend_state = ?21
             WHERE id = ?1",
             params![
                 record.id.0,
@@ -246,6 +252,7 @@ impl Store {
                 record.created_at,
                 record.updated_at,
                 record.category,
+                record.backend_state,
             ],
         )?;
 
@@ -503,6 +510,30 @@ impl Store {
             params![key, value],
         )?;
         Ok(())
+    }
+
+    /// Sets or updates the backend-specific state for a job.
+    pub fn set_backend_state(&self, id: JobId, state: &str) -> Result<(), StoreError> {
+        let connection = self.lock()?;
+        let changed = connection.execute(
+            "UPDATE jobs SET backend_state = ?2 WHERE id = ?1",
+            params![id.0, state],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::JobNotFound(id));
+        }
+        Ok(())
+    }
+
+    /// Retrieves the backend-specific state for a job.
+    pub fn get_backend_state(&self, id: JobId) -> Result<Option<String>, StoreError> {
+        let connection = self.lock()?;
+        let mut statement = connection.prepare("SELECT backend_state FROM jobs WHERE id = ?1")?;
+        let state = statement
+            .query_row(params![id.0], |row| row.get::<_, Option<String>>(0))
+            .optional()?
+            .flatten();
+        Ok(state)
     }
 
     /// Deletes a job and its segments from the database.
@@ -769,6 +800,7 @@ struct DbJob {
     created_at: i64,
     updated_at: i64,
     category: Option<String>,
+    backend_state: Option<String>,
 }
 
 fn db_queue_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Queue> {
@@ -815,6 +847,7 @@ fn db_job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DbJob> {
         created_at: row.get(17)?,
         updated_at: row.get(18)?,
         category: row.get(19)?,
+        backend_state: row.get(20)?,
     })
 }
 
@@ -845,6 +878,7 @@ fn to_job(row: DbJob) -> Result<Job, StoreError> {
         content_type: row.content_type,
         error,
         category: row.category,
+        backend_state: row.backend_state,
         options,
         created_at: row.created_at,
         updated_at: row.updated_at,

@@ -117,7 +117,7 @@ pub enum BackendKind {
 }
 
 /// Per-job request options.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct JobOptions {
     pub headers: Vec<(String, String)>,
@@ -128,6 +128,8 @@ pub struct JobOptions {
     pub speed_limit: Option<u64>,
     pub checksum: Option<crate::checksum::Checksum>,
     pub mirrors: Vec<String>,
+    pub selected_files: Option<Vec<u32>>,
+    pub seed_ratio: Option<f64>,
 }
 
 /// Metadata discovered before or while downloading.
@@ -150,7 +152,7 @@ pub struct JobErrorInfo {
 }
 
 /// A download job.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Job {
     id: JobId,
     source: Source,
@@ -168,6 +170,7 @@ pub struct Job {
     content_type: Option<String>,
     error: Option<JobErrorInfo>,
     category: Option<String>,
+    backend_state: Option<String>,
     options: JobOptions,
     created_at: i64,
     updated_at: i64,
@@ -194,6 +197,7 @@ impl Job {
             content_type: None,
             error: None,
             category: None,
+            backend_state: None,
             options,
             created_at: now,
             updated_at: now,
@@ -266,6 +270,15 @@ impl Job {
 
     pub fn set_category(&mut self, cat: Option<String>) {
         self.category = cat;
+        self.updated_at = now_millis();
+    }
+
+    pub fn backend_state(&self) -> Option<&str> {
+        self.backend_state.as_deref()
+    }
+
+    pub fn set_backend_state(&mut self, state: Option<String>) {
+        self.backend_state = state;
         self.updated_at = now_millis();
     }
 
@@ -373,6 +386,7 @@ impl Job {
             content_type: self.content_type.clone(),
             error: self.error.clone(),
             category: self.category.clone(),
+            backend_state: self.backend_state.clone(),
             options: self.options.clone(),
             created_at: self.created_at,
             updated_at: self.updated_at,
@@ -406,6 +420,7 @@ pub(crate) struct JobRecord {
     pub content_type: Option<String>,
     pub error: Option<JobErrorInfo>,
     pub category: Option<String>,
+    pub backend_state: Option<String>,
     pub options: JobOptions,
     pub created_at: i64,
     pub updated_at: i64,
@@ -430,6 +445,7 @@ impl Job {
             content_type: record.content_type,
             error: record.error,
             category: record.category,
+            backend_state: record.backend_state,
             options: record.options,
             created_at: record.created_at,
             updated_at: record.updated_at,
