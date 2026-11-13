@@ -7,4 +7,5 @@ pub mod routes;
 pub mod scheduler;
 pub mod server;
 pub mod state;
+pub mod webui;
 pub mod ws;

@@ -52,6 +52,7 @@ pub async fn require_bearer_token(
         || path == "/health"
         || path == "/api/v1/events"
         || path == "/events"
+        || !path.starts_with("/api/")
     {
         return Ok(next.run(req).await);
     }

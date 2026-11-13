@@ -14,6 +14,7 @@ use crate::auth::{create_cors_layer, require_bearer_token, validate_host_header}
 use crate::config::DaemonConfig;
 use crate::routes::*;
 use crate::state::AppState;
+use crate::webui::{webui_handler, webui_index_handler};
 use crate::ws::ws_handler;
 
 /// Locate yt-dlp binary: checks `settings_path` if non-empty, otherwise searches `PATH`.
@@ -170,6 +171,8 @@ pub fn build_router_with_state(state: AppState) -> Router {
     Router::new()
         .nest("/api/v1", api_routes)
         .route("/health", get(health_handler))
+        .route("/", get(webui_index_handler))
+        .route("/{*path}", get(webui_handler))
         .layer(from_fn_with_state(token, require_bearer_token))
         .layer(from_fn(validate_host_header))
         .layer(create_cors_layer())
