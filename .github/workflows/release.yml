@@ -1,0 +1,123 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-binaries:
+    name: build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive_type: zip
+            bin_ext: .exe
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive_type: tar.gz
+            bin_ext: ""
+          - target: x86_64-apple-darwin
+            os: macos-13
+            archive_type: tar.gz
+            bin_ext: ""
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive_type: tar.gz
+            bin_ext: ""
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install pinned toolchain
+        run: |
+          rustup toolchain install
+          rustup target add ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release binaries
+        run: cargo build --workspace --release --locked --target ${{ matrix.target }}
+
+      - name: Package binary archive
+        run: |
+          mkdir -p staging
+          cp target/${{ matrix.target }}/release/odm${{ matrix.bin_ext }} staging/
+          cp target/${{ matrix.target }}/release/odm-daemon${{ matrix.bin_ext }} staging/
+          cp target/${{ matrix.target }}/release/odm-gui${{ matrix.bin_ext }} staging/
+          cp README.md LICENSE-MIT LICENSE-APACHE staging/
+
+          ARCHIVE_NAME="odm-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive_type }}"
+          if [ "${{ matrix.archive_type }}" = "zip" ]; then
+            tar -a -cf "$ARCHIVE_NAME" -C staging .
+          else
+            tar -czf "$ARCHIVE_NAME" -C staging .
+          fi
+          mkdir -p release-pkg
+          mv "$ARCHIVE_NAME" release-pkg/
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: release-pkg/*
+          if-no-files-found: error
+
+  build-extensions:
+    name: package extensions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Package extensions
+        run: node scripts/package-extension.mjs --out-dir dist
+
+      - name: Upload extension artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: extensions
+          path: dist/odm-extension-*.zip
+          if-no-files-found: error
+
+  publish-release:
+    name: publish release
+    needs: [build-binaries, build-extensions]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded-artifacts
+
+      - name: Prepare release assets and compute checksums
+        run: |
+          mkdir -p release-assets
+          find downloaded-artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" \) -exec cp {} release-assets/ \;
+          cd release-assets
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true
