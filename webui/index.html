@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>odm</title>
+  <style>
+    :root {
+      --bg-color: #121214;
+      --card-bg: #1e1e24;
+      --border-color: #2e2e38;
+      --text-color: #e1e1e6;
+      --text-muted: #8d8d99;
+      --primary: #4a9eff;
+      --primary-hover: #3385e0;
+      --danger: #f75a68;
+      --danger-hover: #e04856;
+      --success: #04d361;
+      --warning: #ffbb00;
+      --input-bg: #18181c;
+      --header-bg: #18181c;
+      --row-hover: #26262e;
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg-color: #f0f2f5;
+        --card-bg: #ffffff;
+        --border-color: #dcdce6;
+        --text-color: #1f2029;
+        --text-muted: #6c6f7e;
+        --primary: #0066cc;
+        --primary-hover: #0052a3;
+        --danger: #d9383a;
+        --danger-hover: #b82b2d;
+        --success: #1b873f;
+        --warning: #d97706;
+        --input-bg: #f8f9fa;
+        --header-bg: #ffffff;
+        --row-hover: #f4f5f8;
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    body {
+      background-color: var(--bg-color);
+      color: var(--text-color);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      background-color: var(--header-bg);
+      border-bottom: 1px solid var(--border-color);
+      padding: 1rem 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .brand h1 {
+      font-size: 1.25rem;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      color: var(--primary);
+    }
+
+    .brand .version {
+      font-size: 0.75rem;
+      background-color: var(--border-color);
+      color: var(--text-muted);
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background-color: var(--danger);
+      display: inline-block;
+      transition: background-color 0.3s ease;
+    }
+
+    .status-dot.connected {
+      background-color: var(--success);
+    }
+
+    .btn {
+      padding: 0.5rem 0.85rem;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      border: 1px solid transparent;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+      transition: background-color 0.2s, border-color 0.2s;
+    }
+
+    .btn-primary {
+      background-color: var(--primary);
+      color: #fff;
+    }
+
+    .btn-primary:hover {
+      background-color: var(--primary-hover);
+    }
+
+    .btn-danger {
+      background-color: transparent;
+      color: var(--danger);
+      border-color: var(--danger);
+    }
+
+    .btn-danger:hover {
+      background-color: var(--danger);
+      color: #fff;
+    }
+
+    .btn-outline {
+      background-color: transparent;
+      color: var(--text-color);
+      border-color: var(--border-color);
+    }
+
+    .btn-outline:hover {
+      background-color: var(--row-hover);
+    }
+
+    .btn-sm {
+      padding: 0.25rem 0.5rem;
+      font-size: 0.75rem;
+    }
+
+    main {
+      flex: 1;
+      padding: 1.5rem;
+      max-width: 1200px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    /* Auth Screen */
+    .auth-container {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 60vh;
+    }
+
+    .auth-card {
+      background-color: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 2rem;
+      width: 100%;
+      max-width: 400px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+    }
+
+    .auth-card h2 {
+      margin-bottom: 0.5rem;
+      font-size: 1.25rem;
+    }
+
+    .auth-card p {
+      color: var(--text-muted);
+      font-size: 0.875rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .form-group {
+      margin-bottom: 1.25rem;
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 0.8rem;
+      font-weight: 500;
+      margin-bottom: 0.4rem;
+      color: var(--text-muted);
+    }
+
+    .form-control {
+      width: 100%;
+      padding: 0.6rem 0.75rem;
+      background-color: var(--input-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      color: var(--text-color);
+      font-size: 0.875rem;
+      outline: none;
+    }
+
+    .form-control:focus {
+      border-color: var(--primary);
+    }
+
+    .error-msg {
+      color: var(--danger);
+      font-size: 0.8rem;
+      margin-top: 0.5rem;
+      display: none;
+    }
+
+    /* Modal */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background-color: rgba(0, 0, 0, 0.6);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+      z-index: 1000;
+    }
+
+    .modal-backdrop.active {
+      display: flex;
+    }
+
+    .modal-card {
+      background-color: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      width: 100%;
+      max-width: 500px;
+      padding: 1.5rem;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+    }
+
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+
+    .modal-header h3 {
+      font-size: 1.1rem;
+    }
+
+    .modal-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.75rem;
+      margin-top: 1.5rem;
+    }
+
+    /* Downloads Table */
+    .table-container {
+      background-color: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 0.875rem;
+    }
+
+    th {
+      padding: 0.85rem 1rem;
+      background-color: var(--header-bg);
+      color: var(--text-muted);
+      font-weight: 600;
+      border-bottom: 1px solid var(--border-color);
+      white-space: nowrap;
+    }
+
+    td {
+      padding: 0.85rem 1rem;
+      border-bottom: 1px solid var(--border-color);
+      vertical-align: middle;
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    tr:hover td {
+      background-color: var(--row-hover);
+    }
+
+    .filename-cell {
+      max-width: 250px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 500;
+    }
+
+    .progress-bar-container {
+      width: 100%;
+      min-width: 120px;
+      max-width: 180px;
+      height: 8px;
+      background-color: var(--input-bg);
+      border-radius: 4px;
+      overflow: hidden;
+      margin-bottom: 0.25rem;
+    }
+
+    .progress-bar {
+      height: 100%;
+      width: 0%;
+      border-radius: 4px;
+      background-color: var(--primary);
+      transition: width 0.2s ease;
+    }
+
+    .progress-bar.completed { background-color: var(--success); }
+    .progress-bar.paused { background-color: var(--warning); }
+    .progress-bar.failed { background-color: var(--danger); }
+
+    .progress-meta {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .state-badge {
+      display: inline-block;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .state-downloading { background-color: rgba(74, 158, 255, 0.2); color: var(--primary); }
+    .state-completed { background-color: rgba(4, 211, 97, 0.2); color: var(--success); }
+    .state-paused { background-color: rgba(255, 187, 0, 0.2); color: var(--warning); }
+    .state-failed { background-color: rgba(247, 90, 104, 0.2); color: var(--danger); }
+    .state-queued { background-color: rgba(141, 141, 153, 0.2); color: var(--text-muted); }
+    .state-probing { background-color: rgba(74, 158, 255, 0.2); color: var(--primary); }
+    .state-verifying { background-color: rgba(255, 187, 0, 0.2); color: var(--warning); }
+    .state-seeding { background-color: rgba(4, 211, 97, 0.2); color: var(--success); }
+    .state-cancelled { background-color: rgba(141, 141, 153, 0.2); color: var(--text-muted); }
+
+    .action-buttons {
+      display: flex;
+      gap: 0.4rem;
+      white-space: nowrap;
+    }
+
+    .empty-state {
+      padding: 3rem 1rem;
+      text-align: center;
+      color: var(--text-muted);
+    }
+
+    /* Mobile Responsive Card Layout */
+    @media (max-width: 650px) {
+      table, thead, tbody, th, td, tr {
+        display: block;
+      }
+
+      thead {
+        display: none;
+      }
+
+      tr {
+        margin-bottom: 1rem;
+        background-color: var(--card-bg);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 0.75rem;
+      }
+
+      td {
+        border-bottom: none;
+        padding: 0.4rem 0;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      td::before {
+        content: attr(data-label);
+        font-weight: 600;
+        color: var(--text-muted);
+        font-size: 0.75rem;
+      }
+
+      .filename-cell {
+        max-width: 100%;
+        margin-bottom: 0.25rem;
+      }
+
+      .progress-bar-container {
+        max-width: 100%;
+        min-width: 150px;
+      }
+
+      .action-buttons {
+        width: 100%;
+        justify-content: flex-end;
+        margin-top: 0.5rem;
+        padding-top: 0.5rem;
+        border-top: 1px solid var(--border-color);
+      }
+    }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <header>
+    <div class="brand">
+      <h1>odm</h1>
+      <span class="version" id="appVersion">v0.1.0</span>
+      <span class="status-dot" id="wsStatus" title="Disconnected"></span>
+    </div>
+    <div class="header-actions" id="headerActions" style="display: none;">
+      <button class="btn btn-primary" id="openAddModalBtn">+ Add URL</button>
+      <button class="btn btn-outline" id="disconnectBtn">Disconnect</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Auth Screen -->
+    <div class="auth-container" id="authSection">
+      <div class="auth-card">
+        <h2>Connect to odm</h2>
+        <p>Enter the authorization token found in your daemon's config directory.</p>
+        <form id="authForm">
+          <div class="form-group">
+            <label for="tokenInput">Bearer Token</label>
+            <input type="password" id="tokenInput" class="form-control" placeholder="Paste token here" required autofocus autocomplete="current-password">
+            <div class="error-msg" id="authError">Invalid token or connection failed</div>
+          </div>
+          <button type="submit" class="btn btn-primary" style="width: 100%;">Connect</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Downloads Section -->
+    <div id="downloadsSection" style="display: none;">
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Filename</th>
+              <th>Size</th>
+              <th>Progress</th>
+              <th>Speed</th>
+              <th>State</th>
+              <th style="text-align: right;">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="downloadsTableBody">
+            <tr>
+              <td colspan="6" class="empty-state">No downloads yet</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+
+  <!-- Add URL Modal -->
+  <div class="modal-backdrop" id="addModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Add Download</h3>
+        <button class="btn btn-outline btn-sm" id="closeAddModalBtn" style="border:none; font-size:1.2rem;">&times;</button>
+      </div>
+      <form id="addDownloadForm">
+        <div class="form-group">
+          <label for="downloadUrlInput">URL or Magnet Link</label>
+          <input type="text" id="downloadUrlInput" class="form-control" placeholder="https://... or magnet:?..." required>
+          <div class="error-msg" id="addError"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline" id="cancelAddBtn">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="submitAddBtn">Start Download</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    // State
+    let authToken = localStorage.getItem('odm_token') || '';
+    let downloads = [];
+    let socket = null;
+    let reconnectTimeout = null;
+    let reconnectDelay = 1000;
+
+    // Formatting utilities
+    function formatBytes(bytes) {
+      if (bytes == null || isNaN(bytes) || bytes === 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    }
+
+    function formatSpeed(bps) {
+      if (!bps || bps === 0) return '0 B/s';
+      return formatBytes(bps) + '/s';
+    }
+
+    function formatEta(seconds) {
+      if (!seconds || !isFinite(seconds) || seconds < 0) return '--';
+      if (seconds < 60) return `${Math.round(seconds)}s`;
+      const m = Math.floor(seconds / 60);
+      const s = Math.round(seconds % 60);
+      if (m < 60) return `${m}m ${s}s`;
+      const h = Math.floor(m / 60);
+      const remM = m % 60;
+      return `${h}h ${remM}m`;
+    }
+
+    // API Helpers
+    async function apiRequest(path, options = {}) {
+      const headers = {
+        'Content-Type': 'application/json',
+        ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
+        ...options.headers,
+      };
+      const resp = await fetch(path, { ...options, headers });
+      if (!resp.ok) {
+        let errMessage = `HTTP ${resp.status}`;
+        try {
+          const errData = await resp.json();
+          if (errData.error?.message) errMessage = errData.error.message;
+        } catch (_) {}
+        throw new Error(errMessage);
+      }
+      return resp;
+    }
+
+    // UI Updates
+    function showAuth() {
+      document.getElementById('authSection').style.display = 'flex';
+      document.getElementById('downloadsSection').style.display = 'none';
+      document.getElementById('headerActions').style.display = 'none';
+      if (socket) {
+        socket.close();
+        socket = null;
+      }
+    }
+
+    function showMain() {
+      document.getElementById('authSection').style.display = 'none';
+      document.getElementById('downloadsSection').style.display = 'block';
+      document.getElementById('headerActions').style.display = 'flex';
+      loadDownloads();
+      connectWebSocket();
+    }
+
+    async function loadVersion() {
+      try {
+        const resp = await fetch('/api/v1/health');
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data.version) {
+            document.getElementById('appVersion').textContent = `v${data.version}`;
+          }
+        }
+      } catch (_) {}
+    }
+
+    async function loadDownloads() {
+      try {
+        const resp = await apiRequest('/api/v1/downloads');
+        const data = await resp.json();
+        downloads = data.downloads || [];
+        renderDownloads();
+      } catch (err) {
+        console.error('Failed to load downloads:', err);
+      }
+    }
+
+    function renderDownloads() {
+      const tbody = document.getElementById('downloadsTableBody');
+      if (!downloads || downloads.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" class="empty-state">No downloads yet</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = downloads.map(item => {
+        const total = item.total_bytes;
+        const downloaded = item.downloaded_bytes || 0;
+        const pct = item.progress_pct || (total > 0 ? (downloaded / total) * 100 : 0);
+        const speed = item.speed_bps || 0;
+        const etaSecs = (speed > 0 && total && total > downloaded) ? (total - downloaded) / speed : 0;
+        const etaText = speed > 0 ? formatEta(etaSecs) : '';
+
+        let stateClass = 'state-queued';
+        let barClass = '';
+        const st = (item.state || '').toLowerCase();
+        if (st === 'downloading') { stateClass = 'state-downloading'; }
+        else if (st === 'completed') { stateClass = 'state-completed'; barClass = 'completed'; }
+        else if (st === 'paused') { stateClass = 'state-paused'; barClass = 'paused'; }
+        else if (st === 'failed') { stateClass = 'state-failed'; barClass = 'failed'; }
+        else if (st === 'probing') { stateClass = 'state-probing'; }
+        else if (st === 'verifying') { stateClass = 'state-verifying'; barClass = 'paused'; }
+        else if (st === 'seeding') { stateClass = 'state-seeding'; barClass = 'completed'; }
+        else if (st === 'cancelled') { stateClass = 'state-cancelled'; }
+
+        // Action buttons based on state
+        let actions = '';
+        if (st === 'downloading' || st === 'probing' || st === 'queued') {
+          actions += `<button class="btn btn-outline btn-sm" onclick="pauseJob(${item.id})">Pause</button>`;
+        } else if (st === 'paused' || st === 'failed') {
+          actions += `<button class="btn btn-outline btn-sm" onclick="resumeJob(${item.id})">Resume</button>`;
+        }
+        if (st !== 'completed' && st !== 'cancelled') {
+          actions += `<button class="btn btn-outline btn-sm" onclick="cancelJob(${item.id})">Cancel</button>`;
+        }
+        actions += `<button class="btn btn-danger btn-sm" onclick="removeJob(${item.id})">Remove</button>`;
+
+        return `
+          <tr data-id="${item.id}">
+            <td data-label="Filename" class="filename-cell" title="${item.filename || item.url}">${item.filename || item.url}</td>
+            <td data-label="Size">${total ? formatBytes(total) : '--'}</td>
+            <td data-label="Progress">
+              <div class="progress-bar-container">
+                <div class="progress-bar ${barClass}" style="width: ${Math.min(100, Math.max(0, pct))}%"></div>
+              </div>
+              <div class="progress-meta">
+                <span>${pct.toFixed(1)}%</span>
+                <span>${etaText}</span>
+              </div>
+            </td>
+            <td data-label="Speed">${speed > 0 ? formatSpeed(speed) : '--'}</td>
+            <td data-label="State"><span class="state-badge ${stateClass}">${st}</span></td>
+            <td data-label="Actions" style="text-align: right;"><div class="action-buttons">${actions}</div></td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    // Job Controls
+    window.pauseJob = async function(id) {
+      try {
+        await apiRequest(`/api/v1/downloads/${id}/pause`, { method: 'POST' });
+      } catch (err) {
+        alert('Pause failed: ' + err.message);
+      }
+    };
+
+    window.resumeJob = async function(id) {
+      try {
+        await apiRequest(`/api/v1/downloads/${id}/resume`, { method: 'POST' });
+      } catch (err) {
+        alert('Resume failed: ' + err.message);
+      }
+    };
+
+    window.cancelJob = async function(id) {
+      try {
+        await apiRequest(`/api/v1/downloads/${id}/cancel`, { method: 'POST' });
+      } catch (err) {
+        alert('Cancel failed: ' + err.message);
+      }
+    };
+
+    window.removeJob = async function(id) {
+      if (!confirm('Remove this download?')) return;
+      try {
+        await apiRequest(`/api/v1/downloads/${id}`, { method: 'DELETE' });
+      } catch (err) {
+        alert('Remove failed: ' + err.message);
+      }
+    };
+
+    // WebSocket Handling
+    function connectWebSocket() {
+      if (!authToken) return;
+      if (socket) {
+        socket.close();
+      }
+
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}/api/v1/events`;
+      socket = new WebSocket(wsUrl);
+
+      socket.onopen = () => {
+        // Authenticate as first message
+        socket.send(JSON.stringify({ token: authToken }));
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.authenticated !== undefined) {
+            if (msg.authenticated) {
+              document.getElementById('wsStatus').classList.add('connected');
+              document.getElementById('wsStatus').title = 'Connected';
+              reconnectDelay = 1000;
+            } else {
+              showAuth();
+            }
+            return;
+          }
+
+          handleWsEvent(msg);
+        } catch (err) {
+          console.error('WebSocket parse error:', err);
+        }
+      };
+
+      socket.onclose = () => {
+        document.getElementById('wsStatus').classList.remove('connected');
+        document.getElementById('wsStatus').title = 'Disconnected (reconnecting...)';
+        if (authToken) {
+          clearTimeout(reconnectTimeout);
+          reconnectTimeout = setTimeout(() => {
+            reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+            connectWebSocket();
+          }, reconnectDelay);
+        }
+      };
+
+      socket.onerror = (err) => {
+        console.error('WebSocket error:', err);
+      };
+    }
+
+    function handleWsEvent(event) {
+      const type = event.type;
+      const data = event.data;
+
+      if (type === 'job_added') {
+        const idx = downloads.findIndex(d => d.id === data.id);
+        if (idx >= 0) {
+          downloads[idx] = data;
+        } else {
+          downloads.unshift(data);
+        }
+        renderDownloads();
+      } else if (type === 'job_state_changed') {
+        const item = downloads.find(d => d.id === data.id);
+        if (item) {
+          item.state = data.state;
+          renderDownloads();
+        }
+      } else if (type === 'job_progress') {
+        const item = downloads.find(d => d.id === data.id);
+        if (item) {
+          item.downloaded_bytes = data.downloaded_bytes;
+          item.total_bytes = data.total_bytes;
+          item.speed_bps = data.speed_bps;
+          if (data.total_bytes && data.total_bytes > 0) {
+            item.progress_pct = (data.downloaded_bytes / data.total_bytes) * 100;
+          }
+          renderDownloads();
+        }
+      } else if (type === 'job_removed') {
+        downloads = downloads.filter(d => d.id !== data);
+        renderDownloads();
+      }
+    }
+
+    // Event Listeners
+    document.getElementById('authForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const input = document.getElementById('tokenInput');
+      const token = input.value.trim();
+      const errEl = document.getElementById('authError');
+      errEl.style.display = 'none';
+
+      try {
+        authToken = token;
+        // Verify token with downloads route
+        await apiRequest('/api/v1/downloads');
+        localStorage.setItem('odm_token', token);
+        showMain();
+      } catch (err) {
+        authToken = '';
+        errEl.textContent = err.message || 'Authentication failed';
+        errEl.style.display = 'block';
+      }
+    });
+
+    document.getElementById('disconnectBtn').addEventListener('click', () => {
+      authToken = '';
+      localStorage.removeItem('odm_token');
+      showAuth();
+    });
+
+    // Add Download Modal Listeners
+    const addModal = document.getElementById('addModal');
+    document.getElementById('openAddModalBtn').addEventListener('click', () => {
+      document.getElementById('downloadUrlInput').value = '';
+      document.getElementById('addError').style.display = 'none';
+      addModal.classList.add('active');
+      document.getElementById('downloadUrlInput').focus();
+    });
+
+    function closeAddModal() {
+      addModal.classList.remove('active');
+    }
+
+    document.getElementById('closeAddModalBtn').addEventListener('click', closeAddModal);
+    document.getElementById('cancelAddBtn').addEventListener('click', closeAddModal);
+
+    document.getElementById('addDownloadForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const urlInput = document.getElementById('downloadUrlInput');
+      const url = urlInput.value.trim();
+      const errEl = document.getElementById('addError');
+      errEl.style.display = 'none';
+
+      try {
+        await apiRequest('/api/v1/downloads', {
+          method: 'POST',
+          body: JSON.stringify({ url }),
+        });
+        closeAddModal();
+        loadDownloads();
+      } catch (err) {
+        errEl.textContent = err.message || 'Failed to add download';
+        errEl.style.display = 'block';
+      }
+    });
+
+    // Initial boot
+    loadVersion();
+    if (authToken) {
+      showMain();
+    } else {
+      showAuth();
+    }
+  </script>
+</body>
+</html>
