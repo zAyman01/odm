@@ -15,7 +15,7 @@ This document details the manual verification procedures for the `odm-gui` deskt
 ## 2. Daemon Connection Status
 
 - [ ] **Offline Indicator:** When `odm-daemon` is not running, the top-right toolbar indicator shows `○ Daemon Offline` in red.
-- [ ] **Online Indicator:** Start the daemon (`cargo run -p odm-daemon -- --port 47888`). The indicator changes to `● Daemon Connected` in green within 2 seconds.
+- [ ] **Online Indicator:** Start the daemon (`cargo run -p odm-daemon`). The indicator changes to `● Daemon Connected` in green within 2 seconds.
 - [ ] **Reconnection:** Stop the daemon. Observe the status transitions to offline. Restart the daemon. Observe automatic background reconnection and state resync.
 
 ---

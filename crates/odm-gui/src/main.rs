@@ -10,26 +10,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-fn resolve_token() -> Option<String> {
-    if let Ok(token) = std::env::var("ODM_TOKEN") {
-        return Some(token);
-    }
-    if let Some(dirs) = directories::ProjectDirs::from("com", "odm", "odm") {
-        let token_path = dirs.config_dir().join("token");
-        if let Ok(content) = std::fs::read_to_string(token_path) {
-            let trimmed = content.trim();
-            if !trimmed.is_empty() {
-                return Some(trimmed.to_string());
-            }
-        }
-    }
-    None
-}
-
 fn main() -> Result<(), eframe::Error> {
-    let server_url =
-        std::env::var("ODM_DAEMON_URL").unwrap_or_else(|_| "http://127.0.0.1:47888".to_string());
-    let token = resolve_token();
+    let server_url = odm_gui::bridge::default_server_url();
+    let token = odm_gui::bridge::resolve_token();
 
     let (ui_tx, ui_rx) = mpsc::unbounded_channel::<GuiEvent>();
     let (action_tx, action_rx) = mpsc::unbounded_channel::<UserAction>();

@@ -1,5 +1,6 @@
 //! Background Tokio bridge connecting the GUI to the odm-daemon REST & WebSocket API.
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -15,6 +16,38 @@ use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 use crate::messages::{GuiEvent, UserAction};
+
+/// Address the daemon listens on when no override is given (matches `odm-daemon` and `odm`).
+const DEFAULT_SERVER_URL: &str = "http://127.0.0.1:6820";
+
+/// Returns the daemon URL: the override when given, else the daemon's default address.
+pub fn server_url_from(override_url: Option<String>) -> String {
+    override_url.unwrap_or_else(|| DEFAULT_SERVER_URL.to_string())
+}
+
+/// Returns the daemon URL from `ODM_DAEMON_URL`, else the default address.
+pub fn default_server_url() -> String {
+    server_url_from(std::env::var("ODM_DAEMON_URL").ok())
+}
+
+/// Returns where the daemon writes its token (the same location `odm-daemon` and `odm` use).
+pub fn default_token_path() -> Option<PathBuf> {
+    directories::ProjectDirs::from("", "", "odm").map(|dirs| dirs.config_dir().join("token"))
+}
+
+/// Reads a token file; `None` when it is missing or holds only whitespace.
+pub fn read_token_file(path: &Path) -> Option<String> {
+    let content = fs::read_to_string(path).ok()?;
+    let trimmed = content.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// Resolves the token from `ODM_TOKEN`, else the daemon's token file.
+pub fn resolve_token() -> Option<String> {
+    std::env::var("ODM_TOKEN")
+        .ok()
+        .or_else(|| default_token_path().and_then(|path| read_token_file(&path)))
+}
 
 pub struct DaemonBridge {
     _server_url: String,
@@ -47,11 +80,7 @@ impl DaemonBridge {
                     .build()
                     .unwrap_or_else(|_| Client::new());
 
-                let token = explicit_token.or_else(|| {
-                    directories::ProjectDirs::from("com", "odm", "odm")
-                        .and_then(|dirs| fs::read_to_string(dirs.config_dir().join("token")).ok())
-                        .map(|s| s.trim().to_string())
-                });
+                let token = explicit_token.or_else(resolve_token);
 
                 // 1. Health check & report connection status
                 let health_url = format!("{server_url_clone}/api/v1/health");

@@ -163,3 +163,39 @@ fn bridge_starts_without_ambient_runtime() {
     }
     assert!(connected, "bridge never reported a daemon connection");
 }
+
+#[test]
+fn default_server_url_matches_daemon_port() {
+    assert_eq!(
+        odm_gui::bridge::server_url_from(None),
+        "http://127.0.0.1:6820"
+    );
+    assert_eq!(
+        odm_gui::bridge::server_url_from(Some("http://10.0.0.2:9".to_string())),
+        "http://10.0.0.2:9"
+    );
+}
+
+#[test]
+fn read_token_file_ignores_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("token");
+    std::fs::write(&path, "  \n").unwrap();
+    assert_eq!(odm_gui::bridge::read_token_file(&path), None);
+    std::fs::write(&path, "abc\n").unwrap();
+    assert_eq!(
+        odm_gui::bridge::read_token_file(&path).as_deref(),
+        Some("abc")
+    );
+    assert_eq!(
+        odm_gui::bridge::read_token_file(&dir.path().join("missing")),
+        None
+    );
+}
+
+#[test]
+fn default_token_path_matches_daemon() {
+    let expected =
+        directories::ProjectDirs::from("", "", "odm").map(|dirs| dirs.config_dir().join("token"));
+    assert_eq!(odm_gui::bridge::default_token_path(), expected);
+}
