@@ -151,6 +151,10 @@ pub fn build_router_with_state(state: AppState) -> Router {
         .route("/downloads/{id}/cancel", post(cancel_download_handler))
         .route("/downloads/{id}/retry", post(retry_download_handler))
         .route(
+            "/downloads/{id}/position",
+            axum::routing::put(set_position_handler),
+        )
+        .route(
             "/queues",
             get(list_queues_handler).post(create_queue_handler),
         )

@@ -1,5 +1,5 @@
 //! Shared daemon application state.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use odm_core::{Engine, JobId};
@@ -25,6 +25,8 @@ pub struct AppState {
     pub allowed_hosts: crate::auth::AllowedHosts,
     pub http_client: Client,
     semaphores: Arc<Mutex<HashMap<String, QueueSlots>>>,
+    /// Jobs a worker has already taken, so two workers never start the same job.
+    claimed: Arc<Mutex<HashSet<JobId>>>,
 }
 
 /// The slots of one queue and the limit they were sized for.
@@ -59,6 +61,7 @@ impl AppState {
             allowed_hosts: Arc::default(),
             http_client,
             semaphores: Arc::new(Mutex::new(HashMap::new())),
+            claimed: Arc::default(),
         };
         state.apply_global_speed_limit();
         state.reload_allowed_hosts();
@@ -180,21 +183,56 @@ impl AppState {
 
     pub fn spawn_download(&self, id: JobId, queue_name: &str, max_concurrent: u32) {
         let sem = self.get_semaphore(queue_name, max_concurrent);
-        let engine = self.engine.clone();
-        let is_queued = move |engine: &odm_core::Engine| {
-            engine
-                .store()
-                .get_job(id)
-                .is_ok_and(|job| job.state() == odm_core::JobState::Queued)
-        };
-        // A job that waits for a slot as `Queued` may be paused or cancelled meanwhile.
-        let waits_as_queued = is_queued(&engine);
+        let state = self.clone();
+        let queue_name = queue_name.to_string();
+        // A job that waits for a slot as `Queued` takes the next free slot in
+        // queue order; a paused or failed job that is resumed runs itself.
+        let waits_as_queued = self.is_queued(id);
         tokio::spawn(async move {
             let permit = sem.acquire().await;
-            if !waits_as_queued || is_queued(&engine) {
-                run_releasing_slot_when_seeding(&engine, id, permit).await;
+            let next = if waits_as_queued {
+                state.claim_next_queued(&queue_name)
+            } else {
+                state.claim(id).then_some(id)
+            };
+            if let Some(next) = next {
+                run_releasing_slot_when_seeding(&state.engine, next, permit).await;
+                state.release(next);
             }
         });
+    }
+
+    fn is_queued(&self, id: JobId) -> bool {
+        self.engine
+            .store()
+            .get_job(id)
+            .is_ok_and(|job| job.state() == odm_core::JobState::Queued)
+    }
+
+    fn claim(&self, id: JobId) -> bool {
+        self.claimed
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(id)
+    }
+
+    fn release(&self, id: JobId) {
+        self.claimed
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(&id);
+    }
+
+    /// Claims the first job of the queue, by position then id, that is still
+    /// `Queued` and not taken by another worker.
+    fn claim_next_queued(&self, queue_name: &str) -> Option<JobId> {
+        let store = self.engine.store();
+        let queue = store.queue_by_name(queue_name).ok()?;
+        let jobs = store.queue_jobs(queue.id).ok()?;
+        jobs.iter()
+            .filter(|job| job.state() == odm_core::JobState::Queued)
+            .map(|job| job.id())
+            .find(|id| self.claim(*id))
     }
 }
 

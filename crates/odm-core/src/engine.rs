@@ -69,6 +69,26 @@ impl Engine {
         &self.store
     }
 
+    /// Moves a job within its queue and announces the queue change.
+    pub fn set_job_position(&self, id: JobId, position: i64) -> Result<(), EngineError> {
+        self.store.set_job_position(id, position)?;
+        let queue_id = self.store.get_job(id)?.queue_id();
+        if let Some(queue) = self
+            .store
+            .list_queues()?
+            .into_iter()
+            .find(|queue| queue.id == queue_id)
+        {
+            self.announce_queue_changed(&queue.name);
+        }
+        Ok(())
+    }
+
+    /// Tells subscribers that a queue's order, limit or existence changed.
+    pub fn announce_queue_changed(&self, name: &str) {
+        let _ = self.events.send(Event::QueueChanged(name.to_string()));
+    }
+
     /// Sets the speed limit shared by all downloads; `None` or zero removes it.
     pub fn set_global_speed_limit(&self, bytes_per_second: Option<u64>) {
         self.limiter.set_rate(bytes_per_second);

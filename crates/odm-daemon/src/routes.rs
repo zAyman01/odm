@@ -811,6 +811,7 @@ pub async fn update_queue_handler(
             )
         })?;
     state.set_queue_limit(&name, updated.max_concurrent);
+    state.engine.announce_queue_changed(&name);
 
     Ok(Json(queue_to_dto(updated)))
 }
@@ -825,6 +826,35 @@ pub async fn delete_queue_handler(
             Json(ErrorResponse::new("delete_queue_failed", e.to_string())),
         )
     })?;
+    state.engine.announce_queue_changed(&name);
+    Ok(StatusCode::OK)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PositionRequest {
+    pub position: i64,
+}
+
+pub async fn set_position_handler(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(req): Json<PositionRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    state.engine.store().get_job(JobId(id)).map_err(|_| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse::new("not_found", "Job not found")),
+        )
+    })?;
+    state
+        .engine
+        .set_job_position(JobId(id), req.position)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse::new("position_failed", e.to_string())),
+            )
+        })?;
     Ok(StatusCode::OK)
 }
 

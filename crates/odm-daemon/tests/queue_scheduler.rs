@@ -383,3 +383,144 @@ mod settings_take_effect {
         .expect("a lower limit must retire the extra slots");
     }
 }
+
+mod queue_order {
+    use super::sample_job;
+    use axum::http::StatusCode;
+    use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, HOST};
+    use odm_core::{Engine, Event, JobId, JobState, Store};
+    use odm_daemon::config::DaemonConfig;
+    use odm_daemon::server::build_router_with_state;
+    use odm_daemon::state::AppState;
+    use tempfile::tempdir;
+    use tower::ServiceExt;
+
+    async fn send(
+        app: &axum::Router,
+        method: &str,
+        uri: &str,
+        body: serde_json::Value,
+    ) -> StatusCode {
+        let req = axum::http::Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(HOST, "127.0.0.1")
+            .header(AUTHORIZATION, "Bearer secret")
+            .header(CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+        app.clone().oneshot(req).await.unwrap().status()
+    }
+
+    fn queue_changed_names(rx: &mut tokio::sync::broadcast::Receiver<Event>) -> Vec<String> {
+        let mut names = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            if let Event::QueueChanged(name) = event {
+                names.push(name);
+            }
+        }
+        names
+    }
+
+    #[tokio::test]
+    async fn position_route_reorders_and_emits_queue_changed() {
+        let dir = tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let mut first = sample_job(dir.path());
+        let mut second = sample_job(dir.path());
+        store.insert_job(&mut first).unwrap();
+        store.insert_job(&mut second).unwrap();
+        let engine = Engine::new(store.clone()).unwrap();
+        let mut events = engine.subscribe();
+        let state = AppState::new(engine, DaemonConfig::for_test(dir.path(), "secret"));
+        let app = build_router_with_state(state);
+
+        let status = send(
+            &app,
+            "PUT",
+            &format!("/api/v1/downloads/{}/position", second.id().0),
+            serde_json::json!({"position": 0}),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(store.get_job(second.id()).unwrap().position(), 0);
+        assert_eq!(queue_changed_names(&mut events), vec!["default"]);
+        let missing = send(
+            &app,
+            "PUT",
+            "/api/v1/downloads/999/position",
+            serde_json::json!({"position": 1}),
+        )
+        .await;
+        assert_eq!(missing, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn queue_limit_change_and_delete_emit_queue_changed() {
+        let dir = tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        store.create_queue("bulk", 1).unwrap();
+        let engine = Engine::new(store).unwrap();
+        let mut events = engine.subscribe();
+        let state = AppState::new(engine, DaemonConfig::for_test(dir.path(), "secret"));
+        let app = build_router_with_state(state);
+
+        send(
+            &app,
+            "PATCH",
+            "/api/v1/queues/bulk",
+            serde_json::json!({"max_concurrent": 2}),
+        )
+        .await;
+        assert_eq!(queue_changed_names(&mut events), vec!["bulk"]);
+
+        let status = send(&app, "DELETE", "/api/v1/queues/bulk", serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(queue_changed_names(&mut events), vec!["bulk"]);
+    }
+
+    #[tokio::test]
+    async fn queued_jobs_start_in_position_order() {
+        let dir = tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let mut ids = Vec::new();
+        for position in [2, 0, 1] {
+            let mut job = sample_job(dir.path());
+            store.insert_job(&mut job).unwrap();
+            store.set_job_position(job.id(), position).unwrap();
+            ids.push(job.id());
+        }
+        let engine = Engine::new(store).unwrap();
+        let mut events = engine.subscribe();
+        let state = AppState::new(engine, DaemonConfig::for_test(dir.path(), "secret"));
+
+        // One slot, held while all three jobs wait, so only the order decides.
+        let held = state
+            .get_semaphore("default", 1)
+            .acquire_owned()
+            .await
+            .unwrap();
+        for id in &ids {
+            state.spawn_download(*id, "default", 1);
+        }
+        drop(held);
+
+        let mut started: Vec<JobId> = Vec::new();
+        tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            while started.len() < 3 {
+                if let Ok(Event::JobStateChanged { id, state }) = events.recv().await
+                    && state != JobState::Queued
+                    && !started.contains(&id)
+                {
+                    started.push(id);
+                }
+            }
+        })
+        .await
+        .expect("all three jobs should start");
+
+        // Jobs were added at positions 2, 0, 1, so they start 2nd, 3rd, 1st.
+        assert_eq!(started, vec![ids[1], ids[2], ids[0]]);
+    }
+}
