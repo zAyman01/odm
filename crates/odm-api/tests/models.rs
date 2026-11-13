@@ -116,6 +116,7 @@ fn settings_dto_and_update_roundtrips() {
         torrent_listen_port: 6881,
         ffmpeg_path: String::new(),
         ytdlp_path: String::new(),
+        allowed_hosts: String::new(),
     };
     let json = serde_json::to_string(&settings).unwrap();
     let parsed: SettingsDto = serde_json::from_str(&json).unwrap();
@@ -132,6 +133,7 @@ fn settings_dto_and_update_roundtrips() {
         torrent_listen_port: Some(6882),
         ffmpeg_path: None,
         ytdlp_path: None,
+        allowed_hosts: None,
     };
     let json_up = serde_json::to_string(&update).unwrap();
     let parsed_up: UpdateSettingsRequest = serde_json::from_str(&json_up).unwrap();

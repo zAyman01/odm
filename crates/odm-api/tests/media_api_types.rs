@@ -90,6 +90,7 @@ fn settings_dto_with_media_paths_roundtrip() {
         torrent_listen_port: 6881,
         ffmpeg_path: "C:\\bin\\ffmpeg.exe".to_string(),
         ytdlp_path: "C:\\bin\\yt-dlp.exe".to_string(),
+        allowed_hosts: String::new(),
     };
     let json = serde_json::to_string(&settings).unwrap();
     let parsed: SettingsDto = serde_json::from_str(&json).unwrap();

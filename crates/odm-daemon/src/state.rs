@@ -22,6 +22,7 @@ pub struct AppState {
     pub dash: Option<Arc<DashBackend>>,
     pub ytdlp: Option<Arc<YtDlpBackend>>,
     pub plugins: Arc<RwLock<PluginRegistry>>,
+    pub allowed_hosts: crate::auth::AllowedHosts,
     pub http_client: Client,
     semaphores: Arc<Mutex<HashMap<String, QueueSlots>>>,
 }
@@ -55,10 +56,12 @@ impl AppState {
             dash: None,
             ytdlp: None,
             plugins,
+            allowed_hosts: Arc::default(),
             http_client,
             semaphores: Arc::new(Mutex::new(HashMap::new())),
         };
         state.apply_global_speed_limit();
+        state.reload_allowed_hosts();
         state
     }
 
@@ -125,6 +128,22 @@ impl AppState {
                 }
             });
         }
+    }
+
+    /// Reloads the host allow-list from the stored `allowed_hosts` setting.
+    pub fn reload_allowed_hosts(&self) {
+        let setting = self
+            .engine
+            .store()
+            .get_setting("allowed_hosts")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        *self
+            .allowed_hosts
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            crate::auth::parse_allowed_hosts(&setting);
     }
 
     /// Applies the stored `global_speed_limit` setting to the running engine.

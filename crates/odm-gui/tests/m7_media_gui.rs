@@ -129,6 +129,7 @@ fn settings_dialog_ffmpeg_and_ytdlp_paths() {
         torrent_listen_port: 6881,
         ffmpeg_path: "/opt/ffmpeg/bin/ffmpeg".to_string(),
         ytdlp_path: "/opt/yt-dlp".to_string(),
+        allowed_hosts: String::new(),
     };
 
     state.settings_dialog.load_settings(&settings);

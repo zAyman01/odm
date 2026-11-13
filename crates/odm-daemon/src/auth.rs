@@ -5,10 +5,32 @@ use axum::http::{StatusCode, header};
 use axum::middleware::Next;
 use axum::response::Response;
 use odm_api::ErrorResponse;
+use std::sync::{Arc, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 
-/// Middleware verifying that the Host header matches loopback.
+/// Extra host names the daemon accepts besides loopback; shared so a settings change applies at once.
+pub type AllowedHosts = Arc<RwLock<Vec<String>>>;
+
+/// Turns the comma-separated `allowed_hosts` setting into lower-case host names.
+pub fn parse_allowed_hosts(setting: &str) -> Vec<String> {
+    setting
+        .split(',')
+        .map(|host| host.trim().to_ascii_lowercase())
+        .filter(|host| !host.is_empty())
+        .collect()
+}
+
+/// Returns the host name of a Host header value, without port or IPv6 brackets.
+fn host_name(host: &str) -> &str {
+    if let Some(rest) = host.strip_prefix('[') {
+        return rest.split(']').next().unwrap_or(rest);
+    }
+    host.split(':').next().unwrap_or(host)
+}
+
+/// Middleware verifying that the Host header is loopback or an allowed host name.
 pub async fn validate_host_header(
+    State(allowed): State<AllowedHosts>,
     req: Request,
     next: Next,
 ) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
@@ -17,16 +39,14 @@ pub async fn validate_host_header(
         .get(header::HOST)
         .and_then(|val| val.to_str().ok());
 
-    let is_valid = if let Some(host) = host_header {
-        let domain = host
-            .split(':')
-            .next()
-            .unwrap_or(host)
-            .trim_matches(['[', ']']);
-        domain == "127.0.0.1" || domain == "localhost" || domain == "::1"
-    } else {
-        false
-    };
+    let is_valid = host_header.is_some_and(|host| {
+        let domain = host_name(host).to_ascii_lowercase();
+        matches!(domain.as_str(), "127.0.0.1" | "localhost" | "::1")
+            || allowed
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .contains(&domain)
+    });
 
     if !is_valid {
         return Err((

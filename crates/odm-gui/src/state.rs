@@ -257,6 +257,7 @@ impl SettingsDialogState {
             } else {
                 Some(self.ytdlp_path.clone())
             },
+            allowed_hosts: None,
         }
     }
 }

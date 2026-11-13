@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Router;
-use axum::middleware::{from_fn, from_fn_with_state};
+use axum::middleware::from_fn_with_state;
 use axum::routing::{get, post};
 use odm_core::{Engine, Store};
 use odm_media::dash::DashBackend;
@@ -131,6 +131,7 @@ pub fn init_media_backends(store: &Store, engine: &Engine) -> MediaBackends {
 pub fn build_router_with_state(state: AppState) -> Router {
     let token = state.config.token.clone();
     let port = crate::auth::configured_port(&state.config.bind_addr);
+    let allowed_hosts = state.allowed_hosts.clone();
 
     let api_routes = Router::new()
         .route("/health", get(health_handler))
@@ -175,7 +176,7 @@ pub fn build_router_with_state(state: AppState) -> Router {
         .route("/", get(webui_index_handler))
         .route("/{*path}", get(webui_handler))
         .layer(from_fn_with_state(token, require_bearer_token))
-        .layer(from_fn(validate_host_header))
+        .layer(from_fn_with_state(allowed_hosts, validate_host_header))
         .layer(create_cors_layer(port))
 }
 

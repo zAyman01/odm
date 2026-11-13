@@ -211,3 +211,81 @@ async fn cors_allows_same_port_and_extensions() {
         Some("chrome-extension://abcdef")
     );
 }
+
+mod allowed_hosts {
+    use axum::Router;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode, header};
+    use odm_core::{Engine, Store};
+    use odm_daemon::config::DaemonConfig;
+    use odm_daemon::server::build_router_with_state;
+    use odm_daemon::state::AppState;
+    use tempfile::tempdir;
+    use tower::ServiceExt;
+
+    fn app_allowing(hosts: Option<&str>) -> Router {
+        let dir = tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        if let Some(hosts) = hosts {
+            store.set_setting("allowed_hosts", hosts).unwrap();
+        }
+        let engine = Engine::new(store).unwrap();
+        let state = AppState::new(engine, DaemonConfig::for_test(dir.path(), "secret"));
+        build_router_with_state(state)
+    }
+
+    async fn health_status(app: &Router, host: &str) -> StatusCode {
+        let req = Request::builder()
+            .uri("/api/v1/health")
+            .header(header::HOST, host)
+            .body(Body::empty())
+            .unwrap();
+        app.clone().oneshot(req).await.unwrap().status()
+    }
+
+    #[tokio::test]
+    async fn host_in_allow_list_passes() {
+        let app = app_allowing(Some("nas.lan, Media.Local"));
+
+        assert_eq!(health_status(&app, "nas.lan:6820").await, StatusCode::OK);
+        assert_eq!(health_status(&app, "media.local").await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn host_not_in_list_is_403() {
+        let app = app_allowing(Some("nas.lan"));
+
+        assert_eq!(
+            health_status(&app, "attacker.com:6820").await,
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[tokio::test]
+    async fn loopback_always_passes() {
+        let app = app_allowing(Some("nas.lan"));
+
+        for host in ["127.0.0.1:6820", "localhost", "[::1]:6820"] {
+            assert_eq!(health_status(&app, host).await, StatusCode::OK, "{host}");
+        }
+    }
+
+    #[tokio::test]
+    async fn changing_the_allow_list_needs_no_restart() {
+        let app = app_allowing(None);
+        assert_eq!(health_status(&app, "nas.lan").await, StatusCode::FORBIDDEN);
+
+        let patch = Request::builder()
+            .method("PATCH")
+            .uri("/api/v1/settings")
+            .header(header::HOST, "127.0.0.1")
+            .header(header::AUTHORIZATION, "Bearer secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"allowed_hosts":"nas.lan"}"#))
+            .unwrap();
+        let resp = app.clone().oneshot(patch).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        assert_eq!(health_status(&app, "nas.lan").await, StatusCode::OK);
+    }
+}

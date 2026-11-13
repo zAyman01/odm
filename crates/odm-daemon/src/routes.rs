@@ -873,6 +873,11 @@ pub async fn get_settings_handler(
         .ok()
         .flatten()
         .unwrap_or_default();
+    let allowed_hosts = store
+        .get_setting("allowed_hosts")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
 
     Ok(Json(SettingsDto {
         download_dir,
@@ -883,6 +888,7 @@ pub async fn get_settings_handler(
         torrent_listen_port,
         ffmpeg_path,
         ytdlp_path,
+        allowed_hosts,
     }))
 }
 
@@ -915,7 +921,11 @@ pub async fn update_settings_handler(
     if let Some(ref p) = req.ytdlp_path {
         let _ = store.set_setting("ytdlp_path", p);
     }
+    if let Some(ref hosts) = req.allowed_hosts {
+        let _ = store.set_setting("allowed_hosts", hosts);
+    }
     state.apply_global_speed_limit();
+    state.reload_allowed_hosts();
 
     get_settings_handler(State(state)).await
 }

@@ -16,6 +16,9 @@ pub struct SettingsDto {
     pub ffmpeg_path: String,
     #[serde(default)]
     pub ytdlp_path: String,
+    /// Extra host names the daemon answers to, comma separated; loopback always works.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub allowed_hosts: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -36,4 +39,6 @@ pub struct UpdateSettingsRequest {
     pub ffmpeg_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ytdlp_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_hosts: Option<String>,
 }
