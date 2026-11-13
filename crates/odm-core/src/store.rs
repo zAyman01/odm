@@ -478,12 +478,15 @@ impl Store {
         Ok(())
     }
 
-    /// Pauses jobs that were running when the process stopped.
+    /// Settles jobs that were active when the process stopped: running jobs are paused,
+    /// and seeding jobs are completed because torrent sessions are not persisted.
     pub fn recover_interrupted(&self) -> Result<usize, StoreError> {
         let connection = self.lock()?;
         let changed = connection.execute(
-            "UPDATE jobs SET state = 'paused', updated_at = ?1
-             WHERE state IN ('probing', 'downloading', 'verifying')",
+            "UPDATE jobs SET
+                state = CASE state WHEN 'seeding' THEN 'completed' ELSE 'paused' END,
+                updated_at = ?1
+             WHERE state IN ('probing', 'downloading', 'verifying', 'seeding')",
             params![now_millis()],
         )?;
         Ok(changed)

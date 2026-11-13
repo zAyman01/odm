@@ -79,6 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         state = state.with_ytdlp(y);
     }
 
+    state.resume_queued();
     let app = build_router_with_state(state);
 
     let listener = match tokio::net::TcpListener::bind(&config.bind_addr).await {

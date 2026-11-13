@@ -91,6 +91,26 @@ impl AppState {
             .clone()
     }
 
+    /// Starts every job that is still `Queued`, for example after a daemon restart.
+    pub fn resume_queued(&self) {
+        let store = self.engine.store();
+        let (Ok(jobs), Ok(queues)) = (store.list_jobs(), store.list_queues()) else {
+            return;
+        };
+        for job in jobs
+            .iter()
+            .filter(|job| job.state() == odm_core::JobState::Queued)
+        {
+            let (name, limit) = queues
+                .iter()
+                .find(|queue| queue.id == job.queue_id())
+                .map_or(("default", 3), |queue| {
+                    (queue.name.as_str(), queue.max_concurrent)
+                });
+            self.spawn_download(job.id(), name, limit);
+        }
+    }
+
     pub fn spawn_download(&self, id: JobId, queue_name: &str, max_concurrent: u32) {
         let sem = self.get_semaphore(queue_name, max_concurrent);
         let engine = self.engine.clone();

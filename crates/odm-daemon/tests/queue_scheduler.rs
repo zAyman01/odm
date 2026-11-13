@@ -130,3 +130,41 @@ async fn scheduler_auto_pauses_running_jobs_at_stop_time() {
     let updated = engine.store().get_job(job.id()).unwrap();
     assert_eq!(updated.state(), JobState::Paused);
 }
+
+#[tokio::test]
+async fn queued_jobs_start_after_restart() {
+    use axum::Router;
+    use axum::routing::get;
+    use odm_daemon::config::DaemonConfig;
+    use odm_daemon::state::AppState;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new().route("/file.bin", get(|| async { vec![7u8; 2048] }));
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let dir = tempdir().unwrap();
+    let store = Store::open(dir.path().join("test.sqlite")).unwrap();
+    let mut job = Job::new(
+        Source::Url(format!("http://{addr}/file.bin")),
+        dir.path().to_path_buf(),
+        JobOptions::default(),
+    );
+    store.insert_job(&mut job).unwrap();
+
+    let engine = Engine::new(store).unwrap();
+    let state = AppState::new(engine.clone(), DaemonConfig::for_test(dir.path(), "t"));
+    state.resume_queued();
+
+    let mut final_state = JobState::Queued;
+    for _ in 0..100 {
+        final_state = engine.store().get_job(job.id()).unwrap().state();
+        if final_state == JobState::Completed {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(final_state, JobState::Completed);
+}

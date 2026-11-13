@@ -96,3 +96,33 @@ fn list_jobs_returns_inserted_jobs_in_id_order() {
     assert_eq!(jobs[0].id(), first.id());
     assert_eq!(jobs[1].id(), second.id());
 }
+
+#[test]
+fn recover_marks_seeding_completed() {
+    let store = Store::open_in_memory().unwrap();
+    let dir = tempdir().unwrap();
+    let mut seeding = sample_job(dir.path());
+    store.insert_job(&mut seeding).unwrap();
+    seeding.transition_to(JobState::Probing).unwrap();
+    seeding.transition_to(JobState::Downloading).unwrap();
+    seeding.transition_to(JobState::Seeding).unwrap();
+    store.update_job(&seeding).unwrap();
+
+    let mut downloading = sample_job(dir.path());
+    store.insert_job(&mut downloading).unwrap();
+    downloading.transition_to(JobState::Probing).unwrap();
+    downloading.transition_to(JobState::Downloading).unwrap();
+    store.update_job(&downloading).unwrap();
+
+    let changed = store.recover_interrupted().unwrap();
+
+    assert_eq!(changed, 2);
+    assert_eq!(
+        store.get_job(seeding.id()).unwrap().state(),
+        JobState::Completed
+    );
+    assert_eq!(
+        store.get_job(downloading.id()).unwrap().state(),
+        JobState::Paused
+    );
+}
