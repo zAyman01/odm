@@ -49,21 +49,9 @@ pub fn find_ffmpeg(settings_path: &str) -> Option<PathBuf> {
     None
 }
 
+/// Builds the command for an external tool. `Command` itself launches `.bat` and `.cmd`
+/// wrappers and escapes their arguments, so no `cmd.exe /C` wrapper is used.
 fn build_command(ffmpeg: &Path) -> Command {
-    #[cfg(windows)]
-    {
-        let is_batch = ffmpeg
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| ext.eq_ignore_ascii_case("bat") || ext.eq_ignore_ascii_case("cmd"))
-            .unwrap_or(false);
-
-        if is_batch {
-            let mut cmd = Command::new("cmd.exe");
-            cmd.arg("/C").arg(ffmpeg);
-            return cmd;
-        }
-    }
     Command::new(ffmpeg)
 }
 

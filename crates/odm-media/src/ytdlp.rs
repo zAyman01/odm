@@ -349,21 +349,9 @@ impl Backend for YtDlpBackend {
     }
 }
 
+/// Builds the command for an external tool. `Command` itself launches `.bat` and `.cmd`
+/// wrappers and escapes their arguments, so no `cmd.exe /C` wrapper is used.
 fn build_command(ytdlp_path: &Path) -> Command {
-    #[cfg(windows)]
-    {
-        let is_batch = ytdlp_path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .map(|ext| ext.eq_ignore_ascii_case("bat") || ext.eq_ignore_ascii_case("cmd"))
-            .unwrap_or(false);
-
-        if is_batch {
-            let mut cmd = Command::new("cmd.exe");
-            cmd.arg("/C").arg(ytdlp_path);
-            return cmd;
-        }
-    }
     Command::new(ytdlp_path)
 }
 

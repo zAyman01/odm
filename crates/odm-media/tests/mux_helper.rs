@@ -89,3 +89,27 @@ async fn test_mux_audio_video_success() {
     let res = mux_audio_video(&video, &audio, &output, &fake_ffmpeg).await;
     assert!(res.is_ok(), "expected Ok, got {res:?}");
 }
+
+#[cfg(windows)]
+#[tokio::test]
+async fn batch_wrapper_receives_ampersand_argument_intact() {
+    let dir = tempfile::tempdir().unwrap();
+    let tool = dir.path().join("record_args.cmd");
+    // Records every argument it receives next to itself.
+    std::fs::write(
+        &tool,
+        "@echo off\r\necho %*> \"%~dp0args.txt\"\r\nexit /b 0\r\n",
+    )
+    .unwrap();
+
+    let input = dir.path().join("in&x.ts");
+    let output = dir.path().join("out.mp4");
+    // The result does not matter: the fake tool writes no output file.
+    let _ = mux_to_mp4(&input, &output, &tool).await;
+
+    let recorded = std::fs::read_to_string(dir.path().join("args.txt")).unwrap();
+    assert!(
+        recorded.contains("in&x.ts"),
+        "the argument was split at '&': {recorded}"
+    );
+}
