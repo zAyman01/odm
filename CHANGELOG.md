@@ -47,3 +47,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Daemon API endpoints: `POST /api/v1/grabber` for site crawling and `GET /api/v1/plugins` for plugin discovery.
 - CLI commands: `odm grab <url>` (with `--depth`, `--ext`, `--pattern`, `--no-robots`, `--max-pages`, `--add`, `--json`) and `odm plugin list` (with `--json` and security disclosure).
 - GUI Grabber & Plugin dialogs: interactive site grabber with results table and batch-adding, and plugin list dialog with prominent security notice.
+- Embedded Web UI served by the daemon at `http://127.0.0.1:6820/` with bearer authentication, real-time download list, live WebSocket event updates, URL addition modal, pause/resume/cancel/remove controls, and responsive layout for mobile browsers.
+- Browser extension for Chromium and Firefox (Manifest V3) with download interception, configurable extension/size/site filters, context menu integration ("Download with odm", "Download all links"), video media detection (.m3u8, .mpd) with toolbar badge counts and send-to-daemon popup.
