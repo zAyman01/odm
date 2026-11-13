@@ -96,3 +96,31 @@ fn step_zero_returns_error() {
     let err = expand_batch_url("https://example.com/file_[1-5:0].zip").unwrap_err();
     assert!(matches!(err, BatchError::InvalidStep));
 }
+
+#[test]
+fn huge_numeric_range_is_rejected_without_allocating() {
+    assert_eq!(
+        expand_batch_url("https://example.com/[0-99999999999]"),
+        Err(BatchError::TooManyUrls { limit: 10_000 })
+    );
+}
+
+#[test]
+fn cartesian_product_over_the_limit_is_rejected() {
+    assert_eq!(
+        expand_batch_url("https://example.com/[0-999]_[0-999]"),
+        Err(BatchError::TooManyUrls { limit: 10_000 })
+    );
+}
+
+#[test]
+fn range_at_the_limit_still_expands() {
+    let urls = expand_batch_url("https://example.com/[0-9999]").unwrap();
+    assert_eq!(urls.len(), 10_000);
+    assert_eq!(
+        expand_batch_url("https://example.com/[0-99999:10]")
+            .unwrap()
+            .len(),
+        10_000
+    );
+}

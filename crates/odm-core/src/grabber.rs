@@ -190,10 +190,12 @@ impl SiteGrabber {
                 .send()
                 .await
             {
-                Ok(resp) if resp.status().is_success() => match resp.text().await {
-                    Ok(text) => RobotsTxt::parse(&text),
-                    Err(_) => RobotsTxt::default(),
-                },
+                Ok(resp) if resp.status().is_success() => {
+                    match read_limited_text(resp, MAX_PAGE_BYTES).await {
+                        Some(text) => RobotsTxt::parse(&text),
+                        None => RobotsTxt::default(),
+                    }
+                }
                 _ => RobotsTxt::default(),
             }
         } else {
@@ -227,7 +229,7 @@ impl SiteGrabber {
             if visited_pages.contains(&current_url) {
                 continue;
             }
-            if visited_pages.len() >= self.config.max_pages {
+            if visited_pages.len() >= self.config.max_pages.min(MAX_PAGES) {
                 break;
             }
 
@@ -256,9 +258,8 @@ impl SiteGrabber {
                 }
             }
 
-            let html_content = match resp.text().await {
-                Ok(t) => t,
-                Err(_) => continue,
+            let Some(html_content) = read_limited_text(resp, MAX_PAGE_BYTES).await else {
+                continue;
             };
 
             let document = scraper::Html::parse_document(&html_content);
@@ -353,6 +354,33 @@ impl SiteGrabber {
             pages_crawled: visited_pages.len(),
         })
     }
+}
+
+/// Most pages one crawl visits, whatever `max_pages` asks for.
+pub const MAX_PAGES: usize = 500;
+
+/// Largest page body read; a bigger page is skipped.
+pub const MAX_PAGE_BYTES: usize = 10 * 1024 * 1024;
+
+/// Reads a response body as text, or `None` when it exceeds `limit` bytes or fails.
+async fn read_limited_text(mut resp: reqwest::Response, limit: usize) -> Option<String> {
+    if resp.content_length().is_some_and(|len| len > limit as u64) {
+        return None;
+    }
+    let mut body: Vec<u8> = Vec::new();
+    loop {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => {
+                if body.len() + chunk.len() > limit {
+                    return None;
+                }
+                body.extend_from_slice(&chunk);
+            }
+            Ok(None) => break,
+            Err(_) => return None,
+        }
+    }
+    Some(String::from_utf8_lossy(&body).into_owned())
 }
 
 fn filename_from_url(url: &Url) -> String {

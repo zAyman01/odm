@@ -190,3 +190,73 @@ async fn test_crawl_wildcard_pattern_filter() {
     let filenames: Vec<&str> = result.files.iter().map(|f| f.filename.as_str()).collect();
     assert_eq!(filenames, vec!["report.pdf"]);
 }
+
+async fn start_limit_server() -> (SocketAddr, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use axum::extract::{Path, State};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let hits = Arc::new(AtomicUsize::new(0));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new()
+        .route(
+            "/p/{n}",
+            get(
+                |State(hits): State<Arc<AtomicUsize>>, Path(n): Path<u64>| async move {
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    let body = format!(
+                        r#"<html><body><a href="/p/{}">a</a><a href="/p/{}">b</a></body></html>"#,
+                        n + 1,
+                        n + 2
+                    );
+                    ([(header::CONTENT_TYPE, "text/html")], body).into_response()
+                },
+            ),
+        )
+        .route(
+            "/big.html",
+            get(|| async {
+                let mut body = String::from(r#"<html><body><a href="/found.zip">z</a>"#);
+                body.push_str(&"x".repeat(11 * 1024 * 1024));
+                body.push_str("</body></html>");
+                ([(header::CONTENT_TYPE, "text/html")], body).into_response()
+            }),
+        )
+        .with_state(hits.clone());
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (addr, hits)
+}
+
+#[tokio::test]
+async fn crawl_never_visits_more_than_500_pages() {
+    let (addr, hits) = start_limit_server().await;
+    let mut config = GrabberConfig::new(format!("http://{addr}/p/0").parse().unwrap());
+    config.respect_robots_txt = false;
+    config.depth_limit = u32::MAX;
+    config.max_pages = 1_000_000;
+
+    let result = SiteGrabber::new(config)
+        .crawl(&reqwest::Client::new())
+        .await
+        .unwrap();
+
+    assert_eq!(result.pages_crawled, 500);
+    assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 500);
+}
+
+#[tokio::test]
+async fn page_over_10_mib_is_skipped() {
+    let (addr, _hits) = start_limit_server().await;
+    let mut config = GrabberConfig::new(format!("http://{addr}/big.html").parse().unwrap());
+    config.respect_robots_txt = false;
+
+    let result = SiteGrabber::new(config)
+        .crawl(&reqwest::Client::new())
+        .await
+        .unwrap();
+
+    assert!(result.files.is_empty(), "files: {:?}", result.files);
+}

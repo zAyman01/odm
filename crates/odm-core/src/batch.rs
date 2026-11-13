@@ -9,7 +9,12 @@ pub enum BatchError {
     InvalidStep,
     #[error("invalid range specification in batch pattern: {0}")]
     InvalidRange(String),
+    #[error("batch pattern expands to more than {limit} URLs")]
+    TooManyUrls { limit: usize },
 }
+
+/// Most URLs one batch pattern may expand to.
+pub const MAX_BATCH_URLS: usize = 10_000;
 
 /// Expands a batch URL containing bracketed ranges into a vector of concrete URLs.
 ///
@@ -49,6 +54,16 @@ pub fn expand_batch_url(pattern: &str) -> Result<Vec<String>, BatchError> {
 
     if parts.is_empty() {
         return Ok(vec![pattern.to_string()]);
+    }
+
+    let mut total: usize = 1;
+    for part in &parts {
+        total = total
+            .checked_mul(part.len())
+            .filter(|total| *total <= MAX_BATCH_URLS)
+            .ok_or(BatchError::TooManyUrls {
+                limit: MAX_BATCH_URLS,
+            })?;
     }
 
     let mut current = vec![String::new()];
@@ -143,6 +158,13 @@ fn parse_bracket_range(content: &str) -> Result<Vec<String>, BatchError> {
     let end_num = end_str
         .parse::<u64>()
         .map_err(|_| BatchError::InvalidRange(content.to_string()))?;
+
+    let count = start_num.abs_diff(end_num) / (step as u64);
+    if count >= MAX_BATCH_URLS as u64 {
+        return Err(BatchError::TooManyUrls {
+            limit: MAX_BATCH_URLS,
+        });
+    }
 
     let width = if start_str.starts_with('0') || end_str.starts_with('0') {
         start_str.len().max(end_str.len())
