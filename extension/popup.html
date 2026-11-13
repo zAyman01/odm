@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>odm</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <h1>odm</h1>
+    </div>
+    <div class="status-badge">
+      <span class="status-dot" id="statusDot"></span>
+      <span id="statusText">Checking...</span>
+    </div>
+  </header>
+
+  <main>
+    <div class="section-title">
+      <span>Detected Media</span>
+      <button class="btn btn-outline" id="sendAllBtn" style="display: none;">Send All</button>
+    </div>
+    <div class="media-list" id="mediaList">
+      <div class="empty-msg">No media detected on this tab</div>
+    </div>
+  </main>
+
+  <footer>
+    <span id="daemonVersion" style="color: var(--text-muted);"></span>
+    <a id="openOptionsBtn">⚙ Settings</a>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>
