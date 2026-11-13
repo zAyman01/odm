@@ -103,3 +103,45 @@ async fn test_register_backend_and_engine_run() {
     assert_eq!(completed_job.total_bytes(), Some(1024));
     assert_eq!(completed_job.downloaded_bytes(), 1024);
 }
+
+#[tokio::test]
+async fn missing_backend_fails_job_instead_of_hanging() {
+    let store = Store::open_in_memory().unwrap();
+    let engine = Engine::new(store.clone()).unwrap();
+    let dir = tempdir().unwrap();
+    let mut events = engine.subscribe();
+
+    let job = engine
+        .add_download(
+            Source::Url("http://127.0.0.1:1/x.mpd".to_string()),
+            dir.path().to_path_buf(),
+            JobOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(job.backend(), BackendKind::Dash);
+
+    let result = engine.run(job.id()).await;
+    assert!(matches!(
+        result,
+        Err(odm_core::EngineError::NoBackend(BackendKind::Dash))
+    ));
+
+    let stored = store.get_job(job.id()).unwrap();
+    assert_eq!(stored.state(), odm_core::JobState::Failed);
+    let message = &stored.error().unwrap().message;
+    assert!(message.contains("Dash"), "error was: {message}");
+
+    let mut saw_failed = false;
+    while let Ok(event) = events.try_recv() {
+        if matches!(
+            event,
+            odm_core::Event::JobStateChanged {
+                state: odm_core::JobState::Failed,
+                ..
+            }
+        ) {
+            saw_failed = true;
+        }
+    }
+    assert!(saw_failed, "no JobStateChanged{{Failed}} event was sent");
+}

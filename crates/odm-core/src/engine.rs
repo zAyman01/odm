@@ -166,6 +166,18 @@ impl Engine {
         }
     }
 
+    /// Records a failure: stores the error, moves the job to `Failed` and announces it.
+    fn fail_job(&self, job: &mut Job, message: String, retryable: bool) -> Result<(), EngineError> {
+        job.set_error(message, retryable);
+        job.transition_to(JobState::Failed)?;
+        self.store.update_job(job)?;
+        let _ = self.events.send(Event::JobStateChanged {
+            id: job.id(),
+            state: JobState::Failed,
+        });
+        Ok(())
+    }
+
     /// Probes, downloads and persists one job until it finishes or fails.
     pub async fn run(&self, id: JobId) -> Result<Job, EngineError> {
         let mut job = self.store.get_job(id)?;
@@ -201,17 +213,17 @@ impl Engine {
                 state: JobState::Probing,
             });
 
-            let backend = self.get_backend(job.backend())?;
+            let backend = match self.get_backend(job.backend()) {
+                Ok(backend) => backend,
+                Err(error) => {
+                    self.fail_job(&mut job, error.to_string(), false)?;
+                    return Err(error);
+                }
+            };
             let probe = match backend.probe(job.source(), job.options()).await {
                 Ok(probe) => probe,
                 Err(error) => {
-                    job.set_error(error.to_string(), error.is_retryable());
-                    job.transition_to(JobState::Failed)?;
-                    self.store.update_job(&job)?;
-                    let _ = self.events.send(Event::JobStateChanged {
-                        id,
-                        state: JobState::Failed,
-                    });
+                    self.fail_job(&mut job, error.to_string(), error.is_retryable())?;
                     return Err(error.into());
                 }
             };
@@ -297,18 +309,19 @@ impl Engine {
             final_bytes
         });
 
-        let backend = self.get_backend(job.backend())?;
+        let backend = match self.get_backend(job.backend()) {
+            Ok(backend) => backend,
+            Err(error) => {
+                progress_task.abort();
+                self.fail_job(&mut job, error.to_string(), false)?;
+                return Err(error);
+            }
+        };
         let outcome = match backend.run(context).await {
             Ok(outcome) => outcome,
             Err(error) => {
                 let _ = progress_task.await;
-                job.set_error(error.to_string(), error.is_retryable());
-                job.transition_to(JobState::Failed)?;
-                self.store.update_job(&job)?;
-                let _ = self.events.send(Event::JobStateChanged {
-                    id,
-                    state: JobState::Failed,
-                });
+                self.fail_job(&mut job, error.to_string(), error.is_retryable())?;
                 return Err(error.into());
             }
         };
@@ -329,13 +342,7 @@ impl Engine {
                     if let Err(err) =
                         crate::checksum::verify_file_checksum(&job.target_path(), &checksum).await
                     {
-                        job.set_error(err.to_string(), false);
-                        job.transition_to(JobState::Failed)?;
-                        self.store.update_job(&job)?;
-                        let _ = self.events.send(Event::JobStateChanged {
-                            id,
-                            state: JobState::Failed,
-                        });
+                        self.fail_job(&mut job, err.to_string(), false)?;
                         return Err(EngineError::Checksum(err));
                     }
                 }
