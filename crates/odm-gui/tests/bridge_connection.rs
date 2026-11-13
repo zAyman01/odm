@@ -125,3 +125,41 @@ async fn bridge_connects_syncs_downloads_and_forwards_events() {
         "Bridge did not forward websocket progress event"
     );
 }
+
+#[test]
+fn bridge_starts_without_ambient_runtime() {
+    let (addr_tx, addr_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async move {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            addr_tx.send(listener.local_addr().unwrap()).unwrap();
+            let app = Router::new().route(
+                "/api/v1/health",
+                get(|| async {
+                    Json(HealthResponse {
+                        status: "ok".to_string(),
+                        version: "0.1.0".to_string(),
+                    })
+                }),
+            );
+            axum::serve(listener, app).await.unwrap();
+        });
+    });
+    let addr = addr_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    let (ui_tx, mut ui_rx) = mpsc::unbounded_channel::<GuiEvent>();
+    let (_action_tx, action_rx) = mpsc::unbounded_channel::<UserAction>();
+    let _bridge = DaemonBridge::start(format!("http://{addr}"), None, ui_tx, action_rx);
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut connected = false;
+    while std::time::Instant::now() < deadline {
+        if let Ok(GuiEvent::DaemonStatus(true)) = ui_rx.try_recv() {
+            connected = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(connected, "bridge never reported a daemon connection");
+}
