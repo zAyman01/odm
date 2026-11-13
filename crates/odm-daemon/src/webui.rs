@@ -7,14 +7,30 @@ use rust_embed::Embed;
 #[folder = "../../webui/"]
 struct WebUiAssets;
 
+/// Blocks injected script: only same-origin scripts and connections are allowed.
+const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; script-src 'self';     style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'";
+
 pub async fn webui_handler(
     axum::extract::Path(path): axum::extract::Path<String>,
 ) -> impl IntoResponse {
-    serve_file(&path)
+    with_security_headers(serve_file(&path))
 }
 
 pub async fn webui_index_handler() -> impl IntoResponse {
-    serve_file("index.html")
+    with_security_headers(serve_file("index.html"))
+}
+
+fn with_security_headers(mut response: Response) -> Response {
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        header::HeaderValue::from_static(CONTENT_SECURITY_POLICY),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        header::HeaderValue::from_static("nosniff"),
+    );
+    response
 }
 
 fn serve_file(path: &str) -> Response {

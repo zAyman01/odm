@@ -124,3 +124,71 @@ async fn api_protected_routes_still_require_auth() {
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
+
+async fn get_text(path: &str) -> (axum::http::HeaderMap, String) {
+    let dir = tempdir().unwrap();
+    let config = DaemonConfig::for_test(dir.path(), "test-token");
+    let app = build_router(config).unwrap();
+    let req = Request::builder()
+        .uri(path)
+        .header(header::HOST, "127.0.0.1:6820")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let headers = resp.headers().clone();
+    let bytes = axum::body::to_bytes(resp.into_body(), 1_000_000)
+        .await
+        .unwrap();
+    (headers, String::from_utf8_lossy(&bytes).to_string())
+}
+
+#[tokio::test]
+async fn index_served_with_csp_and_no_inline_script() {
+    let (headers, body) = get_text("/").await;
+
+    let csp = headers
+        .get(header::CONTENT_SECURITY_POLICY)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(csp.contains("script-src 'self'"), "csp was: {csp}");
+    assert!(
+        !csp.contains("script-src 'self' 'unsafe-inline'"),
+        "csp was: {csp}"
+    );
+    assert!(csp.contains("frame-ancestors 'none'"), "csp was: {csp}");
+    assert_eq!(
+        headers
+            .get(header::X_CONTENT_TYPE_OPTIONS)
+            .and_then(|v| v.to_str().ok()),
+        Some("nosniff")
+    );
+
+    assert!(body.contains(r#"<script src="/app.js">"#));
+    assert!(
+        !body.contains("<script>"),
+        "index.html must not contain an inline script"
+    );
+    assert!(
+        !body.contains("onclick="),
+        "inline handlers are blocked by the CSP"
+    );
+}
+
+#[tokio::test]
+async fn app_js_never_interpolates_into_inner_html() {
+    let (headers, js) = get_text("/app.js").await;
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(content_type.contains("javascript"), "got {content_type}");
+
+    for line in js.lines().filter(|line| line.contains("innerHTML")) {
+        assert!(
+            !line.contains("${"),
+            "innerHTML must not interpolate values: {line}"
+        );
+    }
+    assert!(js.contains("textContent"));
+}
