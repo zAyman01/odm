@@ -6,12 +6,15 @@ mod commands;
 mod format;
 
 use clap::Parser;
-use commands::{AddArgs, CategoryCommand, Cli, Command, DaemonCommand, QueueCommand};
-use odm_api::{AddDownloadRequest, ChecksumAlgorithm, ChecksumDto, JobOptionsDto};
+use commands::{
+    AddArgs, CategoryCommand, Cli, Command, DaemonCommand, PluginCommands, QueueCommand,
+};
+use odm_api::{AddDownloadRequest, ChecksumAlgorithm, ChecksumDto, GrabberRequest, JobOptionsDto};
 
 use crate::client::DaemonClient;
 use crate::format::{
-    print_categories_table, print_download_detail, print_downloads_table, print_queues_table,
+    print_categories_table, print_download_detail, print_downloads_table, print_grabber_table,
+    print_plugins_table, print_queues_table,
 };
 
 #[tokio::main]
@@ -435,6 +438,85 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
                     );
                 } else {
                     println!("Deleted category '{name}'");
+                }
+                Ok(())
+            }
+        },
+
+        Command::Grab {
+            url,
+            depth,
+            extensions,
+            pattern,
+            no_robots,
+            max_pages,
+            add,
+        } => {
+            let extensions_opt = if extensions.is_empty() {
+                None
+            } else {
+                let mut flat = Vec::new();
+                for e in extensions {
+                    for part in e.split(',') {
+                        let trimmed = part.trim().trim_start_matches('.');
+                        if !trimmed.is_empty() {
+                            flat.push(trimmed.to_string());
+                        }
+                    }
+                }
+                if flat.is_empty() { None } else { Some(flat) }
+            };
+
+            let req = GrabberRequest {
+                url,
+                depth: Some(depth),
+                extensions: extensions_opt,
+                pattern,
+                respect_robots: Some(!no_robots),
+                max_pages: Some(max_pages),
+            };
+
+            let resp = client.grab(&req).await?;
+
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&resp).map_err(|e| e.to_string())?
+                );
+            } else {
+                print_grabber_table(&resp);
+            }
+
+            if add {
+                for file in &resp.files {
+                    let add_req = AddDownloadRequest {
+                        url: file.url.clone(),
+                        target_dir: None,
+                        filename: Some(file.filename.clone()),
+                        queue: None,
+                        category: None,
+                        options: None,
+                    };
+                    let add_resp = client.add_download(&add_req).await?;
+                    if !json {
+                        println!("Added download #{} ({})", add_resp.id, file.url);
+                    }
+                }
+            }
+
+            Ok(())
+        }
+
+        Command::Plugin { subcommand } => match subcommand {
+            PluginCommands::List => {
+                let list = client.list_plugins().await?;
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&list).map_err(|e| e.to_string())?
+                    );
+                } else {
+                    print_plugins_table(&list);
                 }
                 Ok(())
             }

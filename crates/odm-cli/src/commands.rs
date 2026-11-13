@@ -161,6 +161,46 @@ pub enum Command {
 
     #[command(subcommand, about = "Daemon management commands")]
     Daemon(DaemonCommand),
+
+    #[command(about = "Crawl and extract downloadable links from a website")]
+    Grab {
+        #[arg(help = "Starting URL to crawl")]
+        url: String,
+
+        #[arg(long, default_value = "1", help = "Maximum link hop depth")]
+        depth: u32,
+
+        #[arg(
+            long = "ext",
+            value_delimiter = ' ',
+            help = "Filter files by extension(s)"
+        )]
+        extensions: Vec<String>,
+
+        #[arg(long, help = "Regex pattern to filter file URLs")]
+        pattern: Option<String>,
+
+        #[arg(long, help = "Ignore robots.txt restrictions")]
+        no_robots: bool,
+
+        #[arg(long, default_value = "50", help = "Maximum HTML pages to visit")]
+        max_pages: usize,
+
+        #[arg(long, help = "Enqueue found files as active downloads")]
+        add: bool,
+    },
+
+    #[command(about = "Manage and view installed plugins")]
+    Plugin {
+        #[command(subcommand)]
+        subcommand: PluginCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PluginCommands {
+    #[command(about = "List installed plugins")]
+    List,
 }
 
 #[derive(Subcommand, Debug)]

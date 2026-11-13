@@ -1,5 +1,8 @@
 //! Output formatting for tabular text and human-readable reports.
-use odm_api::{DownloadDetailDto, ListDownloadsResponse, ListQueuesResponse};
+use odm_api::{
+    DownloadDetailDto, GrabberResponse, ListDownloadsResponse, ListQueuesResponse,
+    PluginListResponse,
+};
 
 pub fn format_size(bytes: u64) -> String {
     const KIB: u64 = 1024;
@@ -101,5 +104,53 @@ pub fn print_categories_table(list: &odm_api::ListCategoriesResponse) {
     for c in &list.categories {
         let exts = c.extensions.join(", ");
         println!("{:<15} {:<25} {}", c.name, c.directory, exts);
+    }
+}
+
+pub fn print_grabber_table(resp: &GrabberResponse) {
+    if resp.files.is_empty() {
+        println!("No files found (crawled {} pages).", resp.pages_crawled);
+        return;
+    }
+
+    println!(
+        "{:<40} {:<25} {:<30} {:<6}",
+        "URL", "FILENAME", "FOUND ON", "DEPTH"
+    );
+    println!("{}", "-".repeat(105));
+
+    for file in &resp.files {
+        println!(
+            "{:<40} {:<25} {:<30} {:<6}",
+            file.url, file.filename, file.found_on, file.depth
+        );
+    }
+    println!(
+        "\nFound {} file(s) across {} page(s).",
+        resp.files.len(),
+        resp.pages_crawled
+    );
+}
+
+pub fn print_plugins_table(list: &PluginListResponse) {
+    println!("Security notice: Plugins run with full user permissions without sandboxing.\n");
+    if list.plugins.is_empty() {
+        println!("No plugins found.");
+        return;
+    }
+
+    println!(
+        "{:<20} {:<10} {:<12} {:<30} COMMAND",
+        "NAME", "VERSION", "ROLE", "PATTERNS"
+    );
+    println!("{}", "-".repeat(85));
+
+    for p in &list.plugins {
+        let patterns = p.url_patterns.join(", ");
+        let cmd = p.command.join(" ");
+        println!(
+            "{:<20} {:<10} {:<12} {:<30} {}",
+            p.name, p.version, p.role, patterns, cmd
+        );
     }
 }

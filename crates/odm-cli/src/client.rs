@@ -4,8 +4,9 @@ use std::path::PathBuf;
 
 use odm_api::{
     AddDownloadRequest, AddDownloadResponse, CategoryDto, CreateQueueRequest, DownloadDetailDto,
-    ErrorResponse, HealthResponse, ListCategoriesResponse, ListDownloadsResponse,
-    ListQueuesResponse, QueueDto, SetCategoryRequest, UpdateQueueRequest,
+    ErrorResponse, GrabberRequest, GrabberResponse, HealthResponse, ListCategoriesResponse,
+    ListDownloadsResponse, ListQueuesResponse, PluginListResponse, QueueDto, SetCategoryRequest,
+    UpdateQueueRequest,
 };
 use reqwest::header::AUTHORIZATION;
 use reqwest::{Client, Response};
@@ -390,5 +391,34 @@ impl DaemonClient {
                 Err(format!("HTTP Error {status}"))
             }
         }
+    }
+
+    pub async fn grab(&self, req: &GrabberRequest) -> Result<GrabberResponse, String> {
+        let url = format!("{}/api/v1/grabber", self.server_url);
+        let mut req_builder = self.client.post(&url);
+        if let Some(auth) = self.auth_header() {
+            req_builder = req_builder.header(AUTHORIZATION, auth);
+        }
+        let resp = req_builder
+            .json(req)
+            .send()
+            .await
+            .map_err(|e| format!("Request failed: {e}"))?;
+
+        self.handle_response(resp).await
+    }
+
+    pub async fn list_plugins(&self) -> Result<PluginListResponse, String> {
+        let url = format!("{}/api/v1/plugins", self.server_url);
+        let mut req_builder = self.client.get(&url);
+        if let Some(auth) = self.auth_header() {
+            req_builder = req_builder.header(AUTHORIZATION, auth);
+        }
+        let resp = req_builder
+            .send()
+            .await
+            .map_err(|e| format!("Request failed: {e}"))?;
+
+        self.handle_response(resp).await
     }
 }
