@@ -37,3 +37,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Media resume: HLS/DASH downloads resume from saved segment progress after pause or restart.
 - yt-dlp pause/resume: pause kills the process; resume reruns with `--continue`.
 - Settings: `ffmpeg_path` and `ytdlp_path` configurable from CLI, GUI and API.
+- Site Grabber: crawl websites on the same host up to a configurable depth limit with HTML link extraction via `scraper`.
+- `robots.txt` compliance: respects website crawling restrictions by default with configurable bypass option.
+- Link & Asset extraction: collects links and downloadable media from `<a>`, `<img>`, `<source>`, `<video>`, `<audio>`, and `<link>` elements with relative URL normalization.
+- File filtering: filter grabbed files by extension list and/or regex/wildcard pattern with duplicate elimination.
+- External-process plugin host (`odm-plugin`): run custom resolver plugins in any language via JSON stdin/stdout protocol with 30-second timeout isolation and crash protection.
+- Plugin manifest parsing: `plugin.toml` with role validation (`resolver`), commands, and wildcard/regex URL pattern matching.
+- Plugin backend: URLs matching installed plugins automatically route to `BackendKind::Plugin` for resolution and HTTP transfer.
+- Daemon API endpoints: `POST /api/v1/grabber` for site crawling and `GET /api/v1/plugins` for plugin discovery.
+- CLI commands: `odm grab <url>` (with `--depth`, `--ext`, `--pattern`, `--no-robots`, `--max-pages`, `--add`, `--json`) and `odm plugin list` (with `--json` and security disclosure).
+- GUI Grabber & Plugin dialogs: interactive site grabber with results table and batch-adding, and plugin list dialog with prominent security notice.
