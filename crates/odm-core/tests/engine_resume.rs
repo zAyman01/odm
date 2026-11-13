@@ -206,3 +206,70 @@ async fn pausing_a_job_that_is_not_running_is_reported() {
         other => panic!("expected NotRunning, got {other:?}"),
     }
 }
+
+struct StateBackend {
+    seen: Arc<std::sync::Mutex<Option<String>>>,
+}
+
+#[async_trait::async_trait]
+impl odm_core::backend::Backend for StateBackend {
+    fn kind(&self) -> odm_core::BackendKind {
+        odm_core::BackendKind::Torrent
+    }
+
+    async fn probe(
+        &self,
+        _source: &odm_core::Source,
+        _opts: &JobOptions,
+    ) -> Result<odm_core::ProbeResult, odm_core::backend::BackendError> {
+        Ok(odm_core::ProbeResult {
+            backend: odm_core::BackendKind::Torrent,
+            filename: "state.bin".to_string(),
+            total_bytes: Some(10),
+            supports_ranges: true,
+            etag: None,
+            last_modified: None,
+            content_type: None,
+        })
+    }
+
+    async fn run(
+        &self,
+        ctx: odm_core::backend::JobContext,
+    ) -> Result<odm_core::backend::RunOutcome, odm_core::backend::BackendError> {
+        match ctx.store.get_backend_state(ctx.job.id())? {
+            None => {
+                ctx.store
+                    .set_backend_state(ctx.job.id(), r#"{"torrent_id":7}"#)?;
+                Ok(odm_core::backend::RunOutcome::Paused)
+            }
+            Some(state) => {
+                *self.seen.lock().unwrap() = Some(state);
+                Ok(odm_core::backend::RunOutcome::Completed)
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn pause_resume_keeps_backend_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = Engine::new(Store::open_in_memory().unwrap()).unwrap();
+    let seen = Arc::new(std::sync::Mutex::new(None));
+    engine.register_backend(Arc::new(StateBackend { seen: seen.clone() }));
+
+    let job = engine
+        .add_download(
+            odm_core::Source::Magnet("magnet:?xt=urn:btih:dummy".to_string()),
+            dir.path().to_path_buf(),
+            JobOptions::default(),
+        )
+        .unwrap();
+
+    let paused = engine.run(job.id()).await.unwrap();
+    assert_eq!(paused.state(), JobState::Paused);
+    let done = engine.run(job.id()).await.unwrap();
+    assert_eq!(done.state(), JobState::Completed);
+
+    assert_eq!(seen.lock().unwrap().as_deref(), Some(r#"{"torrent_id":7}"#));
+}

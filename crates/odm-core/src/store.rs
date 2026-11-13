@@ -215,7 +215,8 @@ impl Store {
         }
     }
 
-    /// Persists every mutable field of an existing job.
+    /// Persists every mutable field of an existing job except `backend_state`,
+    /// which backends own and write only through `set_backend_state`.
     pub fn update_job(&self, job: &Job) -> Result<(), StoreError> {
         let record = job.record();
         let source_json = serde_json::to_string(&record.source)?;
@@ -229,7 +230,7 @@ impl Store {
                 position = ?7, backend = ?8, total_bytes = ?9, downloaded_bytes = ?10,
                 supports_ranges = ?11, etag = ?12, last_modified = ?13, content_type = ?14,
                 error_message = ?15, error_retryable = ?16, options_json = ?17,
-                created_at = ?18, updated_at = ?19, category = ?20, backend_state = ?21
+                created_at = ?18, updated_at = ?19, category = ?20
             WHERE id = ?1",
             params![
                 record.id.0,
@@ -252,7 +253,6 @@ impl Store {
                 record.created_at,
                 record.updated_at,
                 record.category,
-                record.backend_state,
             ],
         )?;
 

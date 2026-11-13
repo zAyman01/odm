@@ -67,3 +67,24 @@ fn test_job_options_selected_files_and_seed_ratio_roundtrip() {
     assert_eq!(loaded.options().selected_files, Some(vec![0, 2, 5]));
     assert_eq!(loaded.options().seed_ratio, Some(1.5));
 }
+
+#[test]
+fn update_job_does_not_clobber_backend_state() {
+    let store = Store::open_in_memory().unwrap();
+    let dir = tempdir().unwrap();
+    let mut job = Job::new(
+        Source::Url("http://example.com/file.bin".to_string()),
+        dir.path().to_path_buf(),
+        JobOptions::default(),
+    );
+    store.insert_job(&mut job).unwrap();
+    let stale = store.get_job(job.id()).unwrap();
+
+    store.set_backend_state(job.id(), r#"{"x":1}"#).unwrap();
+    store.update_job(&stale).unwrap();
+
+    assert_eq!(
+        store.get_backend_state(job.id()).unwrap().as_deref(),
+        Some(r#"{"x":1}"#)
+    );
+}
