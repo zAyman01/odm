@@ -18,6 +18,7 @@ use tokio::time::{Instant, sleep};
 use url::Url;
 
 use crate::backend::{Backend, BackendError, JobContext, RunOutcome};
+use crate::filename::sanitize_filename;
 use crate::job::{BackendKind, JobOptions, ProbeResult, Source};
 use crate::segment::Segment;
 
@@ -919,19 +920,6 @@ fn url_filename(url: &Url) -> Option<String> {
 
     let decoded = percent_decode_str(segment).decode_utf8_lossy();
     sanitize_filename(&decoded)
-}
-
-fn sanitize_filename(candidate: &str) -> Option<String> {
-    let leaf = candidate.rsplit(['/', '\\']).next().unwrap_or(candidate);
-    let cleaned: String = leaf
-        .chars()
-        .filter(|character| !character.is_control())
-        .collect();
-    if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
-        None
-    } else {
-        Some(cleaned)
-    }
 }
 
 #[cfg(test)]

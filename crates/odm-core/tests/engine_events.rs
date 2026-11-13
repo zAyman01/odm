@@ -148,3 +148,24 @@ async fn pause_queued_job_moves_it_to_paused() {
     }
     assert!(saw_paused, "no JobStateChanged{{Paused}} event");
 }
+
+#[tokio::test]
+async fn user_filename_gets_conflict_suffix() {
+    let (url, _hits) = test_server().await;
+    let store = Store::open_in_memory().unwrap();
+    let engine = Engine::new(store.clone()).unwrap();
+    let dir = tempdir().unwrap();
+
+    let mut names = Vec::new();
+    for _ in 0..2 {
+        let mut job = engine
+            .add(&url, dir.path().to_path_buf(), JobOptions::default())
+            .unwrap();
+        job.set_filename("a.bin");
+        store.update_job(&job).unwrap();
+        let done = engine.run(job.id()).await.unwrap();
+        names.push(done.filename().to_string());
+    }
+
+    assert_eq!(names, vec!["a.bin".to_string(), "a (1).bin".to_string()]);
+}

@@ -904,11 +904,5 @@ fn derive_filename(url: &Url, default_ext: &str) -> String {
 }
 
 fn sanitize_filename(candidate: &str) -> String {
-    let leaf = candidate.rsplit(['/', '\\']).next().unwrap_or(candidate);
-    let cleaned: String = leaf.chars().filter(|c| !c.is_control()).collect();
-    if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
-        "stream".to_string()
-    } else {
-        cleaned
-    }
+    odm_core::sanitize_filename(candidate).unwrap_or_else(|| "stream".to_string())
 }

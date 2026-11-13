@@ -12,6 +12,7 @@ use crate::backend::{
     Backend, BackendError, ControlHandle, ControlToken, JobContext, ProgressSink, RunOutcome,
 };
 use crate::event::Event;
+use crate::filename::sanitize_filename;
 use crate::http::HttpBackend;
 use crate::job::{BackendKind, Job, JobId, JobOptions, JobState, Source, TransitionError};
 use crate::limiter::{Limiter, TokenBucket};
@@ -247,8 +248,21 @@ impl Engine {
                 .filter(|name| !name.is_empty())
                 .collect();
 
-            let mut probe = probe;
-            probe.filename = resolve_filename_conflict(job.target_dir(), &probe.filename, &taken);
+            // A name the job already has (set by the user or an earlier run) is ours:
+            // only other jobs and existing finished files conflict with it.
+            let has_own_name = !job.filename().is_empty();
+            let wanted = if has_own_name {
+                job.filename().to_string()
+            } else {
+                probe.filename.clone()
+            };
+            let wanted = sanitize_filename(&wanted).unwrap_or_else(|| "download".to_string());
+            job.set_filename(resolve_filename_conflict(
+                job.target_dir(),
+                &wanted,
+                &taken,
+                has_own_name,
+            ));
 
             job.apply_probe(probe);
 
@@ -462,6 +476,7 @@ fn resolve_filename_conflict(
     target_dir: &std::path::Path,
     filename: &str,
     taken_names: &[String],
+    own_part_file_ok: bool,
 ) -> String {
     let (stem, ext) = match filename.rsplit_once('.') {
         Some((stem, ext)) if !stem.is_empty() => (stem, Some(ext)),
@@ -470,7 +485,7 @@ fn resolve_filename_conflict(
 
     let is_taken = |candidate: &str| -> bool {
         target_dir.join(candidate).exists()
-            || target_dir.join(format!("{candidate}.part")).exists()
+            || (!own_part_file_ok && target_dir.join(format!("{candidate}.part")).exists())
             || taken_names.iter().any(|name| name == candidate)
     };
 

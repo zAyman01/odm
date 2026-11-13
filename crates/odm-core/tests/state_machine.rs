@@ -87,3 +87,35 @@ fn completed_and_cancelled_are_final() {
         }
     }
 }
+
+#[test]
+fn job_set_filename_sanitises() {
+    let mut job = Job::new(
+        Source::Url("http://example.com/x".to_string()),
+        std::path::PathBuf::from("."),
+        JobOptions::default(),
+    );
+    job.set_filename("../../evil.exe");
+    assert_eq!(job.filename(), "evil.exe");
+    job.set_filename("..");
+    assert_eq!(job.filename(), "download");
+}
+
+#[test]
+fn apply_probe_sanitises() {
+    let mut job = Job::new(
+        Source::Url("http://example.com/x".to_string()),
+        std::path::PathBuf::from("."),
+        JobOptions::default(),
+    );
+    job.apply_probe(odm_core::ProbeResult {
+        backend: odm_core::BackendKind::Http,
+        filename: r"C:\Windows\system32\nul.txt".to_string(),
+        total_bytes: None,
+        supports_ranges: false,
+        etag: None,
+        last_modified: None,
+        content_type: None,
+    });
+    assert_eq!(job.filename(), "_nul.txt");
+}

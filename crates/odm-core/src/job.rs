@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::filename::sanitize_filename;
 use crate::util::now_millis;
 
 /// Stable identifier of a persisted job.
@@ -131,6 +132,10 @@ pub struct JobOptions {
     pub selected_files: Option<Vec<u32>>,
     pub seed_ratio: Option<f64>,
     pub quality: Option<String>,
+}
+
+fn default_filename() -> String {
+    "download".to_string()
 }
 
 /// Metadata discovered before or while downloading.
@@ -317,7 +322,7 @@ impl Job {
     pub fn apply_probe(&mut self, probe: ProbeResult) {
         self.backend = probe.backend;
         if self.filename.is_empty() {
-            self.filename = probe.filename;
+            self.filename = sanitize_filename(&probe.filename).unwrap_or_else(default_filename);
         }
         self.total_bytes = probe.total_bytes;
         self.supports_ranges = probe.supports_ranges;
@@ -327,8 +332,9 @@ impl Job {
         self.updated_at = now_millis();
     }
 
+    /// Sets the filename, keeping only a safe single path segment.
     pub fn set_filename(&mut self, filename: impl Into<String>) {
-        self.filename = filename.into();
+        self.filename = sanitize_filename(&filename.into()).unwrap_or_else(default_filename);
         self.updated_at = now_millis();
     }
 

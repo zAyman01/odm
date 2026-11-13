@@ -7,6 +7,7 @@ pub mod category;
 pub mod checksum;
 pub mod engine;
 pub mod event;
+pub mod filename;
 pub mod grabber;
 pub mod http;
 pub mod job;
@@ -28,6 +29,7 @@ pub use category::Category;
 pub use checksum::{Checksum, ChecksumAlgorithm, ChecksumError, verify_file_checksum};
 pub use engine::{Engine, EngineError};
 pub use event::Event;
+pub use filename::sanitize_filename;
 pub use grabber::{GrabResult, GrabbedFile, GrabberConfig, GrabberError, RobotsTxt, SiteGrabber};
 pub use http::HttpBackend;
 pub use job::{
