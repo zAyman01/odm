@@ -409,6 +409,29 @@ pub async fn add_download_handler(
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
     let store = state.engine.store();
 
+    let forced_backend = match req.backend.as_deref() {
+        None => None,
+        Some("ytdlp") if state.ytdlp.is_some() => Some(odm_core::job::BackendKind::YtDlp),
+        Some("ytdlp") => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::new(
+                    "backend_unavailable",
+                    "yt-dlp was not found; install it or set ytdlp_path in the settings",
+                )),
+            ));
+        }
+        Some(other) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::new(
+                    "unknown_backend",
+                    format!("unknown backend '{other}'"),
+                )),
+            ));
+        }
+    };
+
     let (target_dir, category_name) = if let Some(cat_name) = req.category {
         let cat = store.get_category(&cat_name).ok();
         let cat_dir = cat.and_then(|c| {
@@ -527,7 +550,10 @@ pub async fn add_download_handler(
         },
     };
 
-    let source = if req.url.starts_with("magnet:") {
+    let is_web_url = req.url.starts_with("http://") || req.url.starts_with("https://");
+    let source = if forced_backend.is_some() || is_web_url {
+        Source::Url(req.url.clone())
+    } else if req.url.starts_with("magnet:") {
         Source::Magnet(req.url.clone())
     } else if req.url.ends_with(".torrent") || std::path::Path::new(&req.url).is_file() {
         Source::TorrentFile(PathBuf::from(&req.url))
@@ -547,7 +573,7 @@ pub async fn add_download_handler(
         filename: req.filename,
         category: category_name,
         queue_id: Some(queue.id),
-        backend: is_plugin.then_some(odm_core::job::BackendKind::Plugin),
+        backend: forced_backend.or(is_plugin.then_some(odm_core::job::BackendKind::Plugin)),
     };
     let job = state
         .engine

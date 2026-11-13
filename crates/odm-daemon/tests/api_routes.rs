@@ -101,6 +101,7 @@ async fn full_rest_lifecycle_test() {
         queue: Some("default".to_string()),
         category: None,
         options: None,
+        backend: None,
     })
     .unwrap();
 

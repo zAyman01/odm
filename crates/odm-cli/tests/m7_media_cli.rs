@@ -220,3 +220,47 @@ async fn cli_add_mpd_url_with_quality() {
     assert_eq!(detail.backend.as_deref(), Some("dash"));
     assert_eq!(detail.options.quality.as_deref(), Some("1080p"));
 }
+
+#[tokio::test]
+async fn cli_add_ytdlp_flag_reports_missing_binary() {
+    let (_daemon, server_url, token) = spawn_test_daemon().await;
+    // The daemon only reaches the yt-dlp check when no yt-dlp is installed;
+    // otherwise the add succeeds and the job is a yt-dlp job.
+    let output = Command::new(env!("CARGO_BIN_EXE_odm"))
+        .args([
+            "--server",
+            &server_url,
+            "--token",
+            &token,
+            "add",
+            "https://example.com/watch?v=1",
+            "--ytdlp",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+
+    if output.status.success() {
+        let val: serde_json::Value =
+            serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).unwrap();
+        let id = val["id"].as_i64().unwrap();
+        let info = Command::new(env!("CARGO_BIN_EXE_odm"))
+            .args([
+                "--server",
+                &server_url,
+                "--token",
+                &token,
+                "info",
+                &id.to_string(),
+                "--json",
+            ])
+            .output()
+            .unwrap();
+        let detail: odm_api::DownloadDetailDto = serde_json::from_slice(&info.stdout).unwrap();
+        assert_eq!(detail.backend.as_deref(), Some("yt-dlp"));
+    } else {
+        // With --json the CLI reports errors on stdout.
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("yt-dlp"), "stdout: {stdout}");
+    }
+}

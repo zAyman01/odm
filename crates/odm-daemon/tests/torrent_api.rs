@@ -98,6 +98,7 @@ async fn torrent_api_lifecycle() {
         queue: Some("default".to_string()),
         category: None,
         options: None,
+        backend: None,
     })
     .unwrap();
     let req = axum::http::Request::builder()

@@ -235,6 +235,7 @@ async fn add_download_with_matching_url_selects_plugin_backend() {
         queue: None,
         category: None,
         options: None,
+        backend: None,
     };
     let body_bytes = serde_json::to_vec(&add_req).unwrap();
 

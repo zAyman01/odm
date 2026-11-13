@@ -91,6 +91,7 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
                 select_files,
                 seed_ratio,
                 quality,
+                ytdlp,
             } = *args;
             let mut final_urls = Vec::new();
             let mut metalink_checksum = None;
@@ -214,6 +215,7 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
                     queue: queue.clone(),
                     category: category.clone(),
                     options: options.clone(),
+                    backend: ytdlp.then(|| "ytdlp".to_string()),
                 };
 
                 let resp = client.add_download(&req).await?;
@@ -496,6 +498,7 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
                         queue: None,
                         category: None,
                         options: None,
+                        backend: None,
                     };
                     let add_resp = client.add_download(&add_req).await?;
                     if !json {

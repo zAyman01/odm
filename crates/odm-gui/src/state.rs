@@ -438,6 +438,7 @@ impl ViewState {
                 queue: Some(self.add_dialog.queue.clone()),
                 category: self.add_dialog.category.clone(),
                 options: options.clone(),
+                backend: None,
             })
             .collect()
     }
@@ -542,6 +543,7 @@ impl ViewState {
                 queue: None,
                 category: None,
                 options: None,
+                backend: None,
             })
             .collect()
     }

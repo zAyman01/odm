@@ -42,6 +42,9 @@ pub struct AddDownloadRequest {
     pub category: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub options: Option<JobOptionsDto>,
+    /// Forces a backend by name. Only `"ytdlp"` is accepted today.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

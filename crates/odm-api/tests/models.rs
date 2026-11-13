@@ -66,6 +66,7 @@ fn add_download_request_and_response() {
             speed_limit: Some(1024),
             ..Default::default()
         }),
+        backend: None,
     };
     let json = serde_json::to_string(&req).unwrap();
     let parsed: AddDownloadRequest = serde_json::from_str(&json).unwrap();
@@ -178,4 +179,16 @@ fn checksum_dto_parse_and_roundtrip() {
     let json = serde_json::to_string(&cs).unwrap();
     let parsed: ChecksumDto = serde_json::from_str(&json).unwrap();
     assert_eq!(parsed, cs);
+}
+
+#[test]
+fn add_download_request_backend_is_optional_and_omitted_when_none() {
+    let none: AddDownloadRequest =
+        serde_json::from_str(r#"{"url":"https://example.com/a.zip"}"#).unwrap();
+    assert_eq!(none.backend, None);
+    assert!(!serde_json::to_string(&none).unwrap().contains("backend"));
+
+    let some: AddDownloadRequest =
+        serde_json::from_str(r#"{"url":"https://example.com/v","backend":"ytdlp"}"#).unwrap();
+    assert_eq!(some.backend.as_deref(), Some("ytdlp"));
 }

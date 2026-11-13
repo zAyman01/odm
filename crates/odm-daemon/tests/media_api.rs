@@ -56,6 +56,7 @@ async fn test_add_download_hls() {
         queue: None,
         category: None,
         options: None,
+        backend: None,
     })
     .unwrap();
 
@@ -104,6 +105,7 @@ async fn test_add_download_dash() {
         queue: None,
         category: None,
         options: None,
+        backend: None,
     })
     .unwrap();
 
@@ -155,6 +157,7 @@ async fn test_add_download_with_quality() {
             quality: Some("720p".to_string()),
             ..Default::default()
         }),
+        backend: None,
     })
     .unwrap();
 
@@ -262,4 +265,110 @@ async fn test_settings_ffmpeg_and_ytdlp_path() {
     let settings: SettingsDto = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(settings.ffmpeg_path, "/opt/ffmpeg");
     assert_eq!(settings.ytdlp_path, "/opt/yt-dlp");
+}
+
+fn state_for(dir: &std::path::Path, ytdlp: bool) -> odm_daemon::state::AppState {
+    let store = odm_core::store::Store::open_in_memory().unwrap();
+    let engine = odm_core::Engine::new(store).unwrap();
+    let state =
+        odm_daemon::state::AppState::new(engine.clone(), DaemonConfig::for_test(dir, "secret"));
+    if ytdlp {
+        let backend = std::sync::Arc::new(odm_media::ytdlp::YtDlpBackend::new(
+            dir.join("no-such-yt-dlp"),
+        ));
+        engine.register_backend(backend.clone());
+        state.with_ytdlp(backend)
+    } else {
+        state
+    }
+}
+
+async fn add_with_backend(
+    app: &Router,
+    url: &str,
+    backend: Option<&str>,
+) -> (StatusCode, serde_json::Value) {
+    let body = serde_json::to_vec(&AddDownloadRequest {
+        url: url.to_string(),
+        target_dir: None,
+        filename: None,
+        queue: None,
+        category: None,
+        options: None,
+        backend: backend.map(str::to_string),
+    })
+    .unwrap();
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/api/v1/downloads")
+        .header(HOST, "127.0.0.1")
+        .header(AUTHORIZATION, "Bearer secret")
+        .header(CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(body))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or_default())
+}
+
+async fn backend_of(app: &Router, id: i64) -> Option<String> {
+    let req = axum::http::Request::builder()
+        .method("GET")
+        .uri(format!("/api/v1/downloads/{id}"))
+        .header(HOST, "127.0.0.1")
+        .header(AUTHORIZATION, "Bearer secret")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), 8192).await.unwrap();
+    let detail: DownloadDetailDto = serde_json::from_slice(&bytes).unwrap();
+    detail.backend
+}
+
+#[tokio::test]
+async fn add_with_backend_ytdlp_creates_ytdlp_job() {
+    let dir = tempdir().unwrap();
+    let app = odm_daemon::server::build_router_with_state(state_for(dir.path(), true));
+
+    let (status, body) =
+        add_with_backend(&app, "https://example.com/watch?v=1", Some("ytdlp")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let id = body["id"].as_i64().unwrap();
+    assert_eq!(backend_of(&app, id).await.as_deref(), Some("yt-dlp"));
+}
+
+#[tokio::test]
+async fn ytdlp_without_binary_is_400() {
+    let dir = tempdir().unwrap();
+    let app = odm_daemon::server::build_router_with_state(state_for(dir.path(), false));
+
+    let (status, body) =
+        add_with_backend(&app, "https://example.com/watch?v=1", Some("ytdlp")).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "backend_unavailable");
+}
+
+#[tokio::test]
+async fn unknown_backend_name_is_400() {
+    let dir = tempdir().unwrap();
+    let app = odm_daemon::server::build_router_with_state(state_for(dir.path(), true));
+
+    let (status, _) = add_with_backend(&app, "https://example.com/a.zip", Some("bogus")).await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn https_torrent_url_uses_http_backend() {
+    let dir = tempdir().unwrap();
+    let app = odm_daemon::server::build_router_with_state(state_for(dir.path(), false));
+
+    let (status, body) = add_with_backend(&app, "https://example.com/linux.torrent", None).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let id = body["id"].as_i64().unwrap();
+    assert_eq!(backend_of(&app, id).await.as_deref(), Some("http"));
 }

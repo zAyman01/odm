@@ -48,6 +48,7 @@ async fn e2e_m5_checksums_and_mirrors_persisted() {
             ]),
             ..Default::default()
         }),
+        backend: None,
     };
 
     let req = Request::builder()
@@ -110,6 +111,7 @@ async fn e2e_m5_category_auto_routing_on_download() {
         queue: Some("default".to_string()),
         category: None,
         options: None,
+        backend: None,
     };
 
     let req = Request::builder()

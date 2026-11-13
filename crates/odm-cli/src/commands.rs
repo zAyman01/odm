@@ -98,6 +98,12 @@ pub struct AddArgs {
         help = "Quality or format identifier (e.g. 720p, 1080p, format ID)"
     )]
     pub quality: Option<String>,
+
+    #[arg(
+        long,
+        help = "Download with yt-dlp instead of picking a backend by URL"
+    )]
+    pub ytdlp: bool,
 }
 
 #[derive(Subcommand, Debug)]
