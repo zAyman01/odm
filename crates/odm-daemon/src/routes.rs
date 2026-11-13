@@ -543,28 +543,21 @@ pub async fn add_download_handler(
         false
     };
 
-    let mut job = state
+    let overrides = odm_core::AddOverrides {
+        filename: req.filename,
+        category: category_name,
+        queue_id: Some(queue.id),
+        backend: is_plugin.then_some(odm_core::job::BackendKind::Plugin),
+    };
+    let job = state
         .engine
-        .add_download(source, target_dir, options)
+        .add_download_with(source, target_dir, options, overrides)
         .map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse::new("add_failed", e.to_string())),
             )
         })?;
-
-    if is_plugin {
-        job.set_backend(odm_core::job::BackendKind::Plugin);
-    }
-
-    if let Some(fname) = req.filename {
-        job.set_filename(fname);
-    }
-    if let Some(cat) = category_name {
-        job.set_category(Some(cat));
-    }
-    job.set_queue_id(queue.id);
-    let _ = store.update_job(&job);
 
     let id = job.id();
     state.spawn_download(id, &queue.name, queue.max_concurrent);

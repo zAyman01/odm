@@ -169,3 +169,43 @@ async fn user_filename_gets_conflict_suffix() {
 
     assert_eq!(names, vec!["a.bin".to_string(), "a (1).bin".to_string()]);
 }
+
+#[tokio::test]
+async fn job_added_event_carries_final_fields() {
+    use odm_core::engine::AddOverrides;
+    use odm_core::{BackendKind, Source};
+
+    let store = Store::open_in_memory().unwrap();
+    let engine = Engine::new(store.clone()).unwrap();
+    let dir = tempdir().unwrap();
+    let queue = store.create_queue("extra", 2).unwrap();
+    let mut rx = engine.subscribe();
+
+    let job = engine
+        .add_download_with(
+            Source::Url("http://127.0.0.1:1/file.bin".to_string()),
+            dir.path().to_path_buf(),
+            JobOptions::default(),
+            AddOverrides {
+                filename: Some("../x.bin".to_string()),
+                category: Some("Docs".to_string()),
+                queue_id: Some(queue.id),
+                backend: Some(BackendKind::Plugin),
+            },
+        )
+        .unwrap();
+
+    let mut added = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        if let Event::JobAdded(id) = event {
+            added.push(id);
+        }
+    }
+    assert_eq!(added, vec![job.id()], "JobAdded must be sent exactly once");
+
+    let stored = store.get_job(job.id()).unwrap();
+    assert_eq!(stored.filename(), "x.bin");
+    assert_eq!(stored.category(), Some("Docs"));
+    assert_eq!(stored.queue_id(), queue.id);
+    assert_eq!(stored.backend(), BackendKind::Plugin);
+}

@@ -30,6 +30,15 @@ impl Drop for ControlGuard {
     }
 }
 
+/// Values a caller chooses for a new job instead of the engine's defaults.
+#[derive(Debug, Clone, Default)]
+pub struct AddOverrides {
+    pub filename: Option<String>,
+    pub category: Option<String>,
+    pub queue_id: Option<i64>,
+    pub backend: Option<BackendKind>,
+}
+
 /// Coordinates probing, downloading and persisting one job at a time.
 #[derive(Clone)]
 pub struct Engine {
@@ -87,6 +96,18 @@ impl Engine {
         target_dir: PathBuf,
         options: JobOptions,
     ) -> Result<Job, EngineError> {
+        self.add_download_with(source, target_dir, options, AddOverrides::default())
+    }
+
+    /// Adds a job with the given overrides applied before it is stored, so the row and
+    /// the `JobAdded` event already carry the final filename, category, queue and backend.
+    pub fn add_download_with(
+        &self,
+        source: Source,
+        target_dir: PathBuf,
+        options: JobOptions,
+        overrides: AddOverrides,
+    ) -> Result<Job, EngineError> {
         let backend_kind = match &source {
             Source::Url(url_str) => {
                 let url = Url::parse(url_str)
@@ -104,7 +125,16 @@ impl Engine {
         };
 
         let mut job = Job::new(source, target_dir, options);
-        job.set_backend(backend_kind);
+        job.set_backend(overrides.backend.unwrap_or(backend_kind));
+        if let Some(filename) = overrides.filename {
+            job.set_filename(filename);
+        }
+        if let Some(category) = overrides.category {
+            job.set_category(Some(category));
+        }
+        if let Some(queue_id) = overrides.queue_id {
+            job.set_queue_id(queue_id);
+        }
         self.store.insert_job(&mut job)?;
         let _ = self.events.send(Event::JobAdded(job.id()));
         Ok(job)

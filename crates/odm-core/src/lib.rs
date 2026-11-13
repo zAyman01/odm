@@ -27,7 +27,7 @@ pub use backend::{
 pub use batch::{BatchError, expand_batch_url};
 pub use category::Category;
 pub use checksum::{Checksum, ChecksumAlgorithm, ChecksumError, verify_file_checksum};
-pub use engine::{Engine, EngineError};
+pub use engine::{AddOverrides, Engine, EngineError};
 pub use event::Event;
 pub use filename::sanitize_filename;
 pub use grabber::{GrabResult, GrabbedFile, GrabberConfig, GrabberError, RobotsTxt, SiteGrabber};
