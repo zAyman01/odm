@@ -1,7 +1,7 @@
 //! View-state models and pure reducer functions for the odm GUI.
 use odm_api::{
-    DownloadDetailDto, DownloadItemDto, Event, ProbeResponse, QualityDto, TorrentFileDto,
-    UpdateSettingsRequest,
+    DownloadDetailDto, DownloadItemDto, Event, GrabbedFileDto, GrabberRequest, PluginDto,
+    ProbeResponse, QualityDto, TorrentFileDto, UpdateSettingsRequest,
 };
 
 use crate::messages::GuiEvent;
@@ -23,6 +23,95 @@ pub enum ThemeMode {
     Dark,
     Light,
     System,
+}
+
+#[derive(Debug, Clone)]
+pub struct GrabberViewState {
+    pub is_open: bool,
+    pub url: String,
+    pub depth: u32,
+    pub extensions: String,
+    pub pattern: String,
+    pub respect_robots: bool,
+    pub max_pages: usize,
+    pub is_crawling: bool,
+    pub error: Option<String>,
+    pub files: Vec<GrabbedFileDto>,
+    pub pages_crawled: usize,
+    pub selected_indices: std::collections::HashSet<usize>,
+}
+
+impl Default for GrabberViewState {
+    fn default() -> Self {
+        Self {
+            is_open: false,
+            url: String::new(),
+            depth: 1,
+            extensions: String::new(),
+            pattern: String::new(),
+            respect_robots: true,
+            max_pages: 50,
+            is_crawling: false,
+            error: None,
+            files: Vec::new(),
+            pages_crawled: 0,
+            selected_indices: std::collections::HashSet::new(),
+        }
+    }
+}
+
+impl GrabberViewState {
+    pub fn open(&mut self) {
+        self.is_open = true;
+        self.error = None;
+    }
+
+    pub fn close(&mut self) {
+        self.is_open = false;
+    }
+
+    pub fn toggle_file(&mut self, idx: usize) {
+        if self.selected_indices.contains(&idx) {
+            self.selected_indices.remove(&idx);
+        } else {
+            self.selected_indices.insert(idx);
+        }
+    }
+
+    pub fn select_all(&mut self) {
+        self.selected_indices = (0..self.files.len()).collect();
+    }
+
+    pub fn deselect_all(&mut self) {
+        self.selected_indices.clear();
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PluginsViewState {
+    pub is_open: bool,
+    pub plugins: Vec<PluginDto>,
+    pub is_loading: bool,
+    pub error: Option<String>,
+}
+
+impl PluginsViewState {
+    pub fn open(&mut self) {
+        self.is_open = true;
+        self.error = None;
+    }
+
+    pub fn close(&mut self) {
+        self.is_open = false;
+    }
+
+    pub fn has_security_notice(&self) -> bool {
+        true
+    }
+
+    pub fn security_notice_text(&self) -> &'static str {
+        "Security Notice: Plugins are external programs running with full user permissions without sandboxing. Only install plugins from trusted sources."
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -184,6 +273,8 @@ pub struct ViewState {
     pub daemon_connected: bool,
     pub add_dialog: AddDialogState,
     pub settings_dialog: SettingsDialogState,
+    pub grabber: GrabberViewState,
+    pub plugins: PluginsViewState,
     pub theme: ThemeMode,
     pub status_message: Option<String>,
     pub error_message: Option<String>,
@@ -202,6 +293,8 @@ impl Default for ViewState {
             daemon_connected: false,
             add_dialog: AddDialogState::default(),
             settings_dialog: SettingsDialogState::default(),
+            grabber: GrabberViewState::default(),
+            plugins: PluginsViewState::default(),
             theme: ThemeMode::Dark,
             status_message: None,
             error_message: None,
@@ -388,6 +481,71 @@ impl ViewState {
         self.settings_dialog.open = false;
     }
 
+    pub fn open_grabber_dialog(&mut self) {
+        self.grabber.open();
+    }
+
+    pub fn close_grabber_dialog(&mut self) {
+        self.grabber.close();
+    }
+
+    pub fn open_plugins_dialog(&mut self) {
+        self.plugins.open();
+    }
+
+    pub fn close_plugins_dialog(&mut self) {
+        self.plugins.close();
+    }
+
+    pub fn build_grab_request(&self) -> Option<GrabberRequest> {
+        if self.grabber.url.trim().is_empty() {
+            return None;
+        }
+        let extensions = if self.grabber.extensions.trim().is_empty() {
+            None
+        } else {
+            let list: Vec<String> = self
+                .grabber
+                .extensions
+                .split(',')
+                .map(|s| s.trim().trim_start_matches('.').to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if list.is_empty() { None } else { Some(list) }
+        };
+        let pattern = if self.grabber.pattern.trim().is_empty() {
+            None
+        } else {
+            Some(self.grabber.pattern.trim().to_string())
+        };
+
+        Some(GrabberRequest {
+            url: self.grabber.url.trim().to_string(),
+            depth: Some(self.grabber.depth),
+            extensions,
+            pattern,
+            respect_robots: Some(self.grabber.respect_robots),
+            max_pages: Some(self.grabber.max_pages),
+        })
+    }
+
+    pub fn build_grabbed_add_requests(&self) -> Vec<odm_api::AddDownloadRequest> {
+        self.grabber
+            .files
+            .iter()
+            .enumerate()
+            .filter(|(idx, _)| self.grabber.selected_indices.contains(idx))
+            .map(|(_, file)| odm_api::AddDownloadRequest {
+                url: file.url.clone(),
+                filename: Some(file.filename.clone()),
+                target_dir: None,
+                queue: None,
+                category: None,
+                options: None,
+            })
+            .collect()
+    }
+
     pub fn filtered_downloads(&self) -> Vec<&DownloadItemDto> {
         self.downloads
             .iter()
@@ -447,6 +605,32 @@ impl ViewState {
                     }
                     Err(err) => {
                         self.add_dialog.error = Some(err);
+                    }
+                }
+            }
+            GuiEvent::GrabberResult(res) => {
+                self.grabber.is_crawling = false;
+                match res {
+                    Ok(resp) => {
+                        self.grabber.pages_crawled = resp.pages_crawled;
+                        self.grabber.selected_indices = (0..resp.files.len()).collect();
+                        self.grabber.files = resp.files;
+                        self.grabber.error = None;
+                    }
+                    Err(err) => {
+                        self.grabber.error = Some(err);
+                    }
+                }
+            }
+            GuiEvent::PluginsList(res) => {
+                self.plugins.is_loading = false;
+                match res {
+                    Ok(resp) => {
+                        self.plugins.plugins = resp.plugins;
+                        self.plugins.error = None;
+                    }
+                    Err(err) => {
+                        self.plugins.error = Some(err);
                     }
                 }
             }

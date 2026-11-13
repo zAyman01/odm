@@ -1,7 +1,7 @@
 //! Message types exchanged between the UI thread and the background bridge.
 use odm_api::{
-    AddDownloadRequest, CategoryDto, DownloadDetailDto, DownloadItemDto, Event, ProbeResponse,
-    QueueDto, UpdateSettingsRequest,
+    AddDownloadRequest, CategoryDto, DownloadDetailDto, DownloadItemDto, Event, GrabberRequest,
+    GrabberResponse, PluginListResponse, ProbeResponse, QueueDto, UpdateSettingsRequest,
 };
 
 /// Actions dispatched from the UI thread to the background daemon bridge.
@@ -33,6 +33,8 @@ pub enum UserAction {
         stop_time: Option<String>,
         days: Option<Vec<String>>,
     },
+    StartGrab(Box<GrabberRequest>),
+    FetchPlugins,
     Refresh,
 }
 
@@ -45,6 +47,8 @@ pub enum GuiEvent {
     QueuesList(Vec<QueueDto>),
     DownloadDetail(Box<DownloadDetailDto>),
     ProbeResult(Result<ProbeResponse, String>),
+    GrabberResult(Result<GrabberResponse, String>),
+    PluginsList(Result<PluginListResponse, String>),
     EngineEvent(Event),
     ErrorMessage(String),
     UrlCaptured(String),

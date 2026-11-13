@@ -6,6 +6,8 @@ use crate::state::{ThemeMode, ViewState};
 use crate::ui::add_dialog::render_add_dialog;
 use crate::ui::detail_panel::render_detail_panel;
 use crate::ui::downloads_table::render_downloads_table;
+use crate::ui::grabber_dialog::render_grabber_dialog;
+use crate::ui::plugins_dialog::render_plugins_dialog;
 use crate::ui::settings_dialog::render_settings_dialog;
 use crate::ui::sidebar::render_sidebar;
 use crate::ui::toolbar::render_toolbar;
@@ -113,6 +115,8 @@ impl eframe::App for OdmGuiApp {
             &self.action_tx,
             self.clipboard.as_deref(),
         );
+        render_grabber_dialog(ctx, &mut self.state, &self.action_tx);
+        render_plugins_dialog(ctx, &mut self.state, &self.action_tx);
 
         // Keep UI smoothly animating while active downloads are running
         if self

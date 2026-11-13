@@ -44,6 +44,15 @@ pub fn render_toolbar(
 
         ui.separator();
 
+        if ui.button("🌐 Grabber").clicked() {
+            state.open_grabber_dialog();
+        }
+
+        if ui.button("🔌 Plugins").clicked() {
+            state.open_plugins_dialog();
+            let _ = action_tx.send(UserAction::FetchPlugins);
+        }
+
         if ui.button("⚙ Settings").clicked() {
             state.open_settings_dialog();
         }

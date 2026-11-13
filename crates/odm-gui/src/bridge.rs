@@ -296,6 +296,73 @@ impl DaemonBridge {
                         }
                     }
 
+                    UserAction::StartGrab(grab_req) => {
+                        let url = format!("{server_url_clone}/api/v1/grabber");
+                        let mut req = client.post(&url);
+                        if let Some(ref tok) = token {
+                            req = req.header(AUTHORIZATION, format!("Bearer {tok}"));
+                        }
+                        match req.json(&*grab_req).send().await {
+                            Ok(resp) => {
+                                let status = resp.status();
+                                if status.is_success() {
+                                    if let Ok(data) = resp.json::<odm_api::GrabberResponse>().await
+                                    {
+                                        let _ = ui_tx.send(GuiEvent::GrabberResult(Ok(data)));
+                                    } else {
+                                        let _ = ui_tx.send(GuiEvent::GrabberResult(Err(
+                                            "Failed to parse grabber response".into(),
+                                        )));
+                                    }
+                                } else if let Ok(err) = resp.json::<ErrorResponse>().await {
+                                    let _ =
+                                        ui_tx.send(GuiEvent::GrabberResult(Err(err.error.message)));
+                                } else {
+                                    let _ = ui_tx.send(GuiEvent::GrabberResult(Err(format!(
+                                        "HTTP error {status}"
+                                    ))));
+                                }
+                            }
+                            Err(e) => {
+                                let _ = ui_tx.send(GuiEvent::GrabberResult(Err(e.to_string())));
+                            }
+                        }
+                    }
+
+                    UserAction::FetchPlugins => {
+                        let url = format!("{server_url_clone}/api/v1/plugins");
+                        let mut req = client.get(&url);
+                        if let Some(ref tok) = token {
+                            req = req.header(AUTHORIZATION, format!("Bearer {tok}"));
+                        }
+                        match req.send().await {
+                            Ok(resp) => {
+                                let status = resp.status();
+                                if status.is_success() {
+                                    if let Ok(data) =
+                                        resp.json::<odm_api::PluginListResponse>().await
+                                    {
+                                        let _ = ui_tx.send(GuiEvent::PluginsList(Ok(data)));
+                                    } else {
+                                        let _ = ui_tx.send(GuiEvent::PluginsList(Err(
+                                            "Failed to parse plugin list response".into(),
+                                        )));
+                                    }
+                                } else if let Ok(err) = resp.json::<ErrorResponse>().await {
+                                    let _ =
+                                        ui_tx.send(GuiEvent::PluginsList(Err(err.error.message)));
+                                } else {
+                                    let _ = ui_tx.send(GuiEvent::PluginsList(Err(format!(
+                                        "HTTP error {status}"
+                                    ))));
+                                }
+                            }
+                            Err(e) => {
+                                let _ = ui_tx.send(GuiEvent::PluginsList(Err(e.to_string())));
+                            }
+                        }
+                    }
+
                     UserAction::Refresh => {
                         let _ = fetch_and_send_downloads(
                             &client,

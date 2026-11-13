@@ -3,6 +3,8 @@
 pub mod add_dialog;
 pub mod detail_panel;
 pub mod downloads_table;
+pub mod grabber_dialog;
+pub mod plugins_dialog;
 pub mod settings_dialog;
 pub mod sidebar;
 pub mod toolbar;
