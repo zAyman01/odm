@@ -26,15 +26,28 @@ struct TestHarness {
 
 async fn setup_seeder() -> TestHarness {
     let source_dir = TempDir::new().unwrap();
-    let file_path = source_dir.path().join("test_file.bin");
     let test_bytes: Vec<u8> = (0..64 * 1024).map(|i| (i % 251) as u8).collect();
-    fs::write(&file_path, &test_bytes).unwrap();
+    fs::write(source_dir.path().join("test_file.bin"), &test_bytes).unwrap();
+    let (seeder_session, seeder_addr, magnet_uri) =
+        start_seeder(source_dir.path(), "test_file.bin").await;
 
+    TestHarness {
+        _source_dir: source_dir,
+        _seeder_session: seeder_session,
+        _seeder_addr: seeder_addr,
+        magnet_uri,
+        test_bytes,
+    }
+}
+
+/// Seeds the folder `dir` as a torrent called `name`; returns the session,
+/// its listen address and a magnet link that points peers at it.
+async fn start_seeder(dir: &std::path::Path, name: &str) -> (Arc<Session>, SocketAddr, String) {
     let spawner = BlockingSpawner::new(1);
     let create_result = create_torrent(
-        source_dir.path(),
+        dir,
         CreateTorrentOptions {
-            name: Some("test_file.bin"),
+            name: Some(name),
             piece_length: Some(16384),
             ..Default::default()
         },
@@ -46,7 +59,7 @@ async fn setup_seeder() -> TestHarness {
     let torrent_bytes = create_result.as_bytes().unwrap();
 
     let seeder_session = Session::new_with_opts(
-        source_dir.path().to_path_buf(),
+        dir.to_path_buf(),
         SessionOptions {
             dht: None,
             persistence: None,
@@ -66,7 +79,7 @@ async fn setup_seeder() -> TestHarness {
             AddTorrent::from_bytes(torrent_bytes),
             Some(AddTorrentOptions {
                 paused: false,
-                output_folder: Some(source_dir.path().to_string_lossy().to_string()),
+                output_folder: Some(dir.to_string_lossy().to_string()),
                 overwrite: true,
                 ..Default::default()
             }),
@@ -81,18 +94,10 @@ async fn setup_seeder() -> TestHarness {
     let seeder_addr = seeder_session.listen_addr().unwrap();
     let info_hash = seeder_handle.info_hash();
     let magnet_uri = format!(
-        "magnet:?xt=urn:btih:{}&dn=test_file.bin&x.pe={}",
+        "magnet:?xt=urn:btih:{}&dn={name}&x.pe={seeder_addr}",
         info_hash.as_string(),
-        seeder_addr
     );
-
-    TestHarness {
-        _source_dir: source_dir,
-        _seeder_session: seeder_session,
-        _seeder_addr: seeder_addr,
-        magnet_uri,
-        test_bytes,
-    }
+    (seeder_session, seeder_addr, magnet_uri)
 }
 
 #[tokio::test]
@@ -340,4 +345,68 @@ async fn run_download_can_be_cancelled() {
 
     let outcome = backend.run(ctx).await.unwrap();
     assert_eq!(outcome, RunOutcome::Cancelled);
+}
+
+#[tokio::test]
+async fn magnet_job_downloads_into_target_dir_with_selected_files() {
+    let source_dir = TempDir::new().unwrap();
+    let first: Vec<u8> = (0..32 * 1024).map(|i| (i % 241) as u8).collect();
+    let second: Vec<u8> = (0..32 * 1024).map(|i| (i % 239) as u8).collect();
+    fs::write(source_dir.path().join("a.bin"), &first).unwrap();
+    fs::write(source_dir.path().join("b.bin"), &second).unwrap();
+    let (_seeder, _addr, magnet_uri) = start_seeder(source_dir.path(), "pack").await;
+
+    let session_dir = TempDir::new().unwrap();
+    let target_dir = TempDir::new().unwrap();
+    let leecher_session = Session::new_with_opts(
+        session_dir.path().to_path_buf(),
+        SessionOptions {
+            dht: None,
+            persistence: None,
+            disable_trackers: true,
+            listen: Some(ListenerOptions {
+                listen_addr: "127.0.0.1:0".parse().unwrap(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let backend = TorrentBackend::new_with_session(leecher_session, 0.0);
+
+    let options = JobOptions {
+        selected_files: Some(vec![1]),
+        ..Default::default()
+    };
+    let source = Source::Magnet(magnet_uri);
+    let probe = backend.probe(&source, &options).await.unwrap();
+
+    let store = Store::open_in_memory().unwrap();
+    let mut job = Job::new(source, target_dir.path().to_path_buf(), options);
+    job.set_backend(BackendKind::Torrent);
+    job.set_filename(&probe.filename);
+    store.insert_job(&mut job).unwrap();
+
+    let (_control_handle, control_token) = ControlToken::new();
+    let (progress_sink, _progress_rx) = ProgressSink::new();
+    let ctx = JobContext {
+        job,
+        control: control_token,
+        progress: progress_sink,
+        store,
+        limiter: Limiter::new(Arc::new(TokenBucket::new(0)), None),
+    };
+
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(60), backend.run(ctx))
+        .await
+        .expect("magnet job should not stay paused")
+        .unwrap();
+
+    assert_eq!(outcome, RunOutcome::Completed);
+    // librqbit keeps an empty placeholder for files that were not selected.
+    assert_eq!(fs::read(target_dir.path().join("b.bin")).unwrap(), second);
+    let skipped = fs::metadata(target_dir.path().join("a.bin")).map_or(0, |m| m.len());
+    assert_eq!(skipped, 0, "the unselected file must not be downloaded");
+    assert!(!session_dir.path().join("b.bin").exists());
 }

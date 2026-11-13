@@ -11,7 +11,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use librqbit::{
-    AddTorrent, AddTorrentOptions, AddTorrentResponse, ListenerOptions, Session, SessionOptions,
+    AddTorrent, AddTorrentOptions, AddTorrentResponse, ListOnlyResponse, ListenerOptions, Session,
+    SessionOptions,
 };
 use odm_core::backend::{Backend, BackendError, JobContext, RunOutcome};
 use odm_core::job::{BackendKind, JobOptions, JobState, ProbeResult, Source};
@@ -124,52 +125,52 @@ impl TorrentBackend {
                 Ok(files)
             }
             Source::Magnet(uri) => {
-                let peers = extract_peers_from_magnet(uri);
-                let add_opts = AddTorrentOptions {
-                    paused: false,
-                    initial_peers: if peers.is_empty() { None } else { Some(peers) },
-                    overwrite: true,
-                    ..Default::default()
-                };
-
-                let resp = self
-                    .session
-                    .add_torrent(AddTorrent::from_url(uri.as_str()), Some(add_opts))
-                    .await
-                    .map_err(|e| BackendError::Torrent(e.to_string()))?;
-
-                let (_id, handle) = match resp {
-                    AddTorrentResponse::Added(id, h) => (id, h),
-                    AddTorrentResponse::AlreadyManaged(id, h) => (id, h),
-                    AddTorrentResponse::ListOnly(_) => {
-                        return Err(BackendError::Torrent("unexpected list_only".into()));
-                    }
-                };
-
-                let _ = tokio::time::timeout(
-                    std::time::Duration::from_secs(5),
-                    handle.wait_until_initialized(),
-                )
-                .await;
-
-                let files = handle
-                    .with_metadata(|meta| {
-                        let mut list = Vec::new();
-                        for (idx, detail) in meta.info.iter_file_details().enumerate() {
-                            list.push(TorrentFileInfo {
-                                index: idx as u32,
-                                path: detail.filename.to_string(),
-                                size: detail.len,
-                            });
-                        }
-                        list
+                let listing = self.list_magnet(uri).await?.ok_or_else(|| {
+                    BackendError::Torrent("timed out waiting for the magnet metadata".into())
+                })?;
+                Ok(listing
+                    .info
+                    .iter_file_details()
+                    .enumerate()
+                    .map(|(idx, detail)| TorrentFileInfo {
+                        index: idx as u32,
+                        path: detail.filename.to_string(),
+                        size: detail.len,
                     })
-                    .map_err(|e| BackendError::Torrent(e.to_string()))?;
-
-                let _ = self.session.pause(&handle).await;
-                Ok(files)
+                    .collect())
             }
             Source::Url(_) => Err(BackendError::Unsupported),
+        }
+    }
+}
+
+/// How long a magnet probe waits for peers to send the torrent metadata.
+const MAGNET_METADATA_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+impl TorrentBackend {
+    /// Resolves a magnet's metadata without adding the torrent to the session,
+    /// so `run` is the only place that adds it (with its folder and file choice).
+    /// Returns `None` when no peer sent the metadata in time.
+    async fn list_magnet(&self, uri: &str) -> Result<Option<ListOnlyResponse>, BackendError> {
+        let peers = extract_peers_from_magnet(uri);
+        let add_opts = AddTorrentOptions {
+            list_only: true,
+            initial_peers: if peers.is_empty() { None } else { Some(peers) },
+            ..Default::default()
+        };
+        let listed = tokio::time::timeout(
+            MAGNET_METADATA_TIMEOUT,
+            self.session
+                .add_torrent(AddTorrent::from_url(uri), Some(add_opts)),
+        )
+        .await;
+        match listed {
+            Ok(Ok(AddTorrentResponse::ListOnly(listing))) => Ok(Some(listing)),
+            Ok(Ok(_)) => Err(BackendError::Torrent(
+                "list-only add returned a managed torrent".into(),
+            )),
+            Ok(Err(e)) => Err(BackendError::Torrent(e.to_string())),
+            Err(_) => Ok(None),
         }
     }
 }
@@ -237,52 +238,17 @@ impl Backend for TorrentBackend {
                 let magnet = librqbit::Magnet::parse(uri)
                     .map_err(|e| BackendError::InvalidUrl(format!("invalid magnet URI: {e}")))?;
 
-                let peers = extract_peers_from_magnet(uri);
-                let add_opts = AddTorrentOptions {
-                    paused: false,
-                    initial_peers: if peers.is_empty() { None } else { Some(peers) },
-                    overwrite: true,
-                    ..Default::default()
+                let (filename, total_bytes) = match self.list_magnet(uri).await? {
+                    Some(listing) => (
+                        listing
+                            .info
+                            .name()
+                            .map(|n| n.to_string())
+                            .unwrap_or_else(|| "torrent".to_string()),
+                        Some(listing.info.lengths().total_length()),
+                    ),
+                    None => (magnet.name.unwrap_or_else(|| "torrent".to_string()), None),
                 };
-
-                let resp = self
-                    .session
-                    .add_torrent(AddTorrent::from_url(uri.as_str()), Some(add_opts))
-                    .await
-                    .map_err(|e| BackendError::Torrent(e.to_string()))?;
-
-                let (_id, handle) = match resp {
-                    AddTorrentResponse::Added(id, h) => (id, h),
-                    AddTorrentResponse::AlreadyManaged(id, h) => (id, h),
-                    AddTorrentResponse::ListOnly(_) => {
-                        return Err(BackendError::Torrent("unexpected list_only".into()));
-                    }
-                };
-
-                let init_result = tokio::time::timeout(
-                    std::time::Duration::from_secs(5),
-                    handle.wait_until_initialized(),
-                )
-                .await;
-
-                let (filename, total_bytes) = if init_result.is_ok() {
-                    handle
-                        .with_metadata(|meta| {
-                            let name = meta
-                                .info
-                                .name()
-                                .map(|n| n.to_string())
-                                .unwrap_or_else(|| "torrent".to_string());
-                            let total = meta.info.lengths().total_length();
-                            (name, Some(total))
-                        })
-                        .map_err(|e| BackendError::Torrent(e.to_string()))?
-                } else {
-                    let name = magnet.name.unwrap_or_else(|| "torrent".to_string());
-                    (name, None)
-                };
-
-                let _ = self.session.pause(&handle).await;
 
                 Ok(ProbeResult {
                     backend: BackendKind::Torrent,
