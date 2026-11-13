@@ -9,25 +9,64 @@ const ext = typeof chrome !== 'undefined' ? chrome : browser;
 /** @type {Map<number, {url: string, mime: string}[]>} tabId → detected media */
 const detectedMedia = new Map();
 
+const MEDIA_KEY = 'detectedMedia';
+/** Survives service worker restarts; `storage.session` is cleared when the browser closes. */
+const mediaArea = ext.storage.session || ext.storage.local;
+
+function storageGet(area, keys) {
+  return new Promise((resolve) => area.get(keys, (items) => resolve(items || {})));
+}
+
+function storageSet(area, items) {
+  return new Promise((resolve) => area.set(items, () => resolve()));
+}
+
+function storageRemove(area, keys) {
+  return new Promise((resolve) => area.remove(keys, () => resolve()));
+}
+
 /**
- * Reads user settings from storage.
+ * Reads user settings from storage. The token lives in `storage.local` so it is not
+ * synced to the browser account; a token saved in `storage.sync` by an older version
+ * is moved over and removed from the synced copy.
  */
-async function getSettings() {
-  return new Promise((resolve) => {
-    ext.storage.sync.get(
-      ['token', 'port', 'enabled', 'minSize', 'extensionList', 'disabledSites'],
-      (items) => {
-        resolve({
-          token: items?.token || '',
-          port: items?.port || DEFAULT_PORT,
-          enabled: items?.enabled !== false,
-          minSize: items?.minSize || 0,
-          extensionList: items?.extensionList || '',
-          disabledSites: items?.disabledSites || '',
-        });
-      }
-    );
-  });
+export async function getSettings() {
+  const items = await storageGet(ext.storage.sync, [
+    'token',
+    'port',
+    'enabled',
+    'minSize',
+    'extensionList',
+    'disabledSites',
+  ]);
+  let token = (await storageGet(ext.storage.local, ['token'])).token || '';
+  if (items.token) {
+    if (!token) {
+      token = items.token;
+      await storageSet(ext.storage.local, { token });
+    }
+    await storageRemove(ext.storage.sync, ['token']);
+  }
+  return {
+    token,
+    port: items.port || DEFAULT_PORT,
+    enabled: items.enabled !== false,
+    minSize: items.minSize || 0,
+    extensionList: items.extensionList || '',
+    disabledSites: items.disabledSites || '',
+  };
+}
+
+async function loadMedia() {
+  const stored = (await storageGet(mediaArea, [MEDIA_KEY]))[MEDIA_KEY] || {};
+  for (const [tabId, list] of Object.entries(stored)) {
+    if (!detectedMedia.has(Number(tabId))) detectedMedia.set(Number(tabId), list);
+  }
+}
+const mediaReady = loadMedia();
+
+async function saveMedia() {
+  await storageSet(mediaArea, { [MEDIA_KEY]: Object.fromEntries(detectedMedia) });
 }
 
 /**
@@ -158,7 +197,7 @@ if (ext.contextMenus && ext.contextMenus.onClicked) {
 // --- Media Detection ---
 if (ext.webRequest && ext.webRequest.onBeforeRequest) {
   ext.webRequest.onBeforeRequest.addListener(
-    (details) => {
+    async (details) => {
       const url = details.url;
       if (!url) return;
 
@@ -169,10 +208,12 @@ if (ext.webRequest && ext.webRequest.onBeforeRequest) {
         (details.type === 'xmlhttprequest' && (url.includes('.m3u8') || url.includes('.mpd')));
 
       if (isMedia && details.tabId >= 0) {
+        await mediaReady;
         const tabMedia = detectedMedia.get(details.tabId) || [];
         if (!tabMedia.some((m) => m.url === url)) {
           tabMedia.push({ url, mime: details.type || '' });
           detectedMedia.set(details.tabId, tabMedia);
+          await saveMedia();
 
           if (ext.action) {
             ext.action.setBadgeText({
@@ -196,6 +237,7 @@ if (ext.tabs && ext.tabs.onUpdated) {
   ext.tabs.onUpdated.addListener((tabId, changeInfo) => {
     if (changeInfo.status === 'loading') {
       detectedMedia.delete(tabId);
+      saveMedia();
       if (ext.action) {
         ext.action.setBadgeText({ text: '', tabId });
       }
@@ -206,13 +248,14 @@ if (ext.tabs && ext.tabs.onUpdated) {
 if (ext.tabs && ext.tabs.onRemoved) {
   ext.tabs.onRemoved.addListener((tabId) => {
     detectedMedia.delete(tabId);
+    saveMedia();
   });
 }
 
 // Message handler for popup
 ext.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action === 'getMedia' && msg.tabId != null) {
-    sendResponse(detectedMedia.get(msg.tabId) || []);
+    mediaReady.then(() => sendResponse(detectedMedia.get(msg.tabId) || []));
   }
   return true;
 });

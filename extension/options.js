@@ -20,11 +20,16 @@ document.addEventListener('DOMContentLoaded', () => {
   const statusMsg = document.getElementById('statusMessage');
 
   // Load existing settings
+  // The token is kept in storage.local so it is not synced to the browser account.
+  api.storage.local.get(['token'], (local) => {
+    if (local?.token) tokenInput.value = local.token;
+  });
   api.storage.sync.get(
     ['token', 'port', 'enabled', 'minSize', 'extensionList', 'disabledSites'],
     (items) => {
       enabledInput.checked = items?.enabled !== false;
-      tokenInput.value = items?.token || '';
+      // Older versions saved the token in storage.sync; show it until it is saved again.
+      if (items?.token && !tokenInput.value) tokenInput.value = items.token;
       portInput.value = String(items?.port || DEFAULT_PORT);
       minSizeInput.value = String(items?.minSize ?? 0);
       extensionListInput.value = items?.extensionList !== undefined ? items.extensionList : DEFAULT_EXTENSIONS;
@@ -90,15 +95,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const settings = {
       enabled: enabledInput.checked,
-      token: tokenInput.value.trim(),
       port: parseInt(portInput.value.trim(), 10) || DEFAULT_PORT,
       minSize: parseInt(minSizeInput.value.trim(), 10) || 0,
       extensionList: extensionListInput.value.trim(),
       disabledSites: disabledSitesInput.value.trim(),
     };
 
-    api.storage.sync.set(settings, () => {
-      showStatus('Settings saved successfully!', true);
+    api.storage.local.set({ token: tokenInput.value.trim() }, () => {
+      api.storage.sync.remove(['token'], () => {
+        api.storage.sync.set(settings, () => {
+          showStatus('Settings saved successfully!', true);
+        });
+      });
     });
   });
 });

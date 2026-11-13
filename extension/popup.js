@@ -7,10 +7,12 @@ const api = typeof chrome !== 'undefined' ? chrome : browser;
 
 async function getSettings() {
   return new Promise((resolve) => {
-    api.storage.sync.get(['port', 'token'], (items) => {
-      resolve({
-        port: items?.port || DEFAULT_PORT,
-        token: items?.token || '',
+    api.storage.sync.get(['port'], (items) => {
+      api.storage.local.get(['token'], (local) => {
+        resolve({
+          port: items?.port || DEFAULT_PORT,
+          token: local?.token || '',
+        });
       });
     });
   });
