@@ -38,18 +38,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .flatten()
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
-    let seed_ratio = store
+    let seed_ratio: Option<f64> = store
         .get_setting("seed_ratio")
         .ok()
         .flatten()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0.0);
+        .and_then(|s| s.parse().ok());
 
     let torrent_dir = config.data_dir.join("torrents");
     let _ = std::fs::create_dir_all(&torrent_dir);
     let torrent = match odm_torrent::TorrentBackend::new(torrent_dir, torrent_listen_port).await {
         Ok(mut t) => {
-            t.set_default_seed_ratio(seed_ratio);
+            if let Some(ratio) = seed_ratio {
+                t.set_default_seed_ratio(ratio);
+            }
             let t = std::sync::Arc::new(t);
             engine.register_backend(t.clone());
             Some(t)

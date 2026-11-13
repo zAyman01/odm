@@ -55,7 +55,7 @@ impl TorrentBackend {
 
         Ok(Self {
             session,
-            default_seed_ratio: 0.0,
+            default_seed_ratio: DEFAULT_SEED_RATIO,
         })
     }
 
@@ -143,6 +143,9 @@ impl TorrentBackend {
         }
     }
 }
+
+/// Seed ratio used when neither the job nor the settings name one.
+pub const DEFAULT_SEED_RATIO: f64 = 1.0;
 
 /// How long a magnet probe waits for peers to send the torrent metadata.
 const MAGNET_METADATA_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -382,6 +385,11 @@ impl Backend for TorrentBackend {
                         {
                             let _ = ctx.store.update_job(&current_job);
                         }
+                        ctx.progress.report_state(
+                            JobState::Seeding,
+                            stats.progress_bytes,
+                            Some(stats.total_bytes),
+                        );
                     }
                     let downloaded = stats.progress_bytes.max(1) as f64;
                     let current_ratio = stats.uploaded_bytes as f64 / downloaded;

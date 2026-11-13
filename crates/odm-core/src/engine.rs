@@ -342,6 +342,9 @@ impl Engine {
             let mut final_bytes = initial_bytes;
             while let Some(update) = updates.recv().await {
                 final_bytes = update.downloaded_bytes;
+                if let Some(state) = update.state {
+                    let _ = events_tx.send(Event::JobStateChanged { id, state });
+                }
                 let now = tokio::time::Instant::now();
                 let elapsed = now.duration_since(last_emit);
                 if elapsed >= std::time::Duration::from_millis(250) {

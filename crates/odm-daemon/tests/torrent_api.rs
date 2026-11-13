@@ -149,3 +149,121 @@ async fn torrent_api_lifecycle() {
     assert_eq!(settings.seed_ratio, 1.5);
     assert_eq!(settings.torrent_listen_port, 6881);
 }
+
+#[tokio::test]
+async fn seeding_job_releases_queue_slot() {
+    use odm_core::JobState;
+    use odm_torrent::librqbit::{AddTorrent, AddTorrentOptions, ListenerOptions};
+
+    // A seeder that serves one small file.
+    let seed_dir = tempdir().unwrap();
+    fs::write(seed_dir.path().join("seed.bin"), vec![0x5A; 32 * 1024]).unwrap();
+    let created = create_torrent(
+        seed_dir.path(),
+        CreateTorrentOptions {
+            name: Some("seed.bin"),
+            piece_length: Some(16384),
+            ..Default::default()
+        },
+        &BlockingSpawner::new(1),
+    )
+    .await
+    .unwrap();
+    let seeder = Session::new_with_opts(
+        seed_dir.path().to_path_buf(),
+        SessionOptions {
+            dht: None,
+            persistence: None,
+            disable_trackers: true,
+            listen: Some(ListenerOptions {
+                listen_addr: "127.0.0.1:0".parse().unwrap(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let seeding = seeder
+        .add_torrent(
+            AddTorrent::from_bytes(created.as_bytes().unwrap()),
+            Some(AddTorrentOptions {
+                output_folder: Some(seed_dir.path().to_string_lossy().to_string()),
+                overwrite: true,
+                ..Default::default()
+            }),
+        )
+        .await
+        .unwrap()
+        .into_handle()
+        .unwrap();
+    seeding.wait_until_completed().await.unwrap();
+    let magnet = format!(
+        "magnet:?xt=urn:btih:{}&dn=seed.bin&x.pe={}",
+        seeding.info_hash().as_string(),
+        seeder.listen_addr().unwrap()
+    );
+
+    // The daemon under test downloads it with a seed ratio nobody can reach.
+    let dir = tempdir().unwrap();
+    let engine = Engine::new(Store::open_in_memory().unwrap()).unwrap();
+    let leecher = Session::new_with_opts(
+        dir.path().join("torrent_data"),
+        SessionOptions {
+            dht: None,
+            persistence: None,
+            disable_trackers: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let backend = Arc::new(TorrentBackend::new_with_session(leecher, 1.0));
+    engine.register_backend(backend.clone());
+    let state =
+        AppState::new(engine, DaemonConfig::for_test(dir.path(), "secret")).with_torrent(backend);
+    state.engine.store().create_queue("solo", 1).unwrap();
+    let app = build_router_with_state(state.clone());
+
+    let add_body = serde_json::to_vec(&AddDownloadRequest {
+        url: magnet,
+        target_dir: Some(dir.path().join("out").to_string_lossy().to_string()),
+        filename: None,
+        queue: Some("solo".to_string()),
+        category: None,
+        options: None,
+        backend: None,
+    })
+    .unwrap();
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/api/v1/downloads")
+        .header(HOST, "127.0.0.1")
+        .header(AUTHORIZATION, "Bearer secret")
+        .header(CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(add_body))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+    let id = serde_json::from_slice::<AddDownloadResponse>(&bytes)
+        .unwrap()
+        .id;
+
+    let semaphore = state.get_semaphore("solo", 1);
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let seeding = state
+                .engine
+                .store()
+                .get_job(odm_core::JobId(id))
+                .is_ok_and(|job| job.state() == JobState::Seeding);
+            if seeding && semaphore.available_permits() == 1 {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("a seeding job must give its queue slot back");
+}

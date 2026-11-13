@@ -209,3 +209,68 @@ async fn job_added_event_carries_final_fields() {
     assert_eq!(stored.queue_id(), queue.id);
     assert_eq!(stored.backend(), BackendKind::Plugin);
 }
+
+struct SeedingBackend;
+
+#[async_trait::async_trait]
+impl odm_core::backend::Backend for SeedingBackend {
+    fn kind(&self) -> odm_core::BackendKind {
+        odm_core::BackendKind::Torrent
+    }
+
+    async fn probe(
+        &self,
+        _source: &odm_core::Source,
+        _opts: &JobOptions,
+    ) -> Result<odm_core::ProbeResult, odm_core::backend::BackendError> {
+        Ok(odm_core::ProbeResult {
+            backend: odm_core::BackendKind::Torrent,
+            filename: "seed.bin".to_string(),
+            total_bytes: Some(10),
+            supports_ranges: true,
+            etag: None,
+            last_modified: None,
+            content_type: None,
+        })
+    }
+
+    async fn run(
+        &self,
+        ctx: odm_core::backend::JobContext,
+    ) -> Result<odm_core::backend::RunOutcome, odm_core::backend::BackendError> {
+        ctx.progress.report_state(JobState::Seeding, 10, Some(10));
+        Ok(odm_core::backend::RunOutcome::Completed)
+    }
+}
+
+#[tokio::test]
+async fn backend_reported_state_is_announced_before_completion() {
+    let dir = tempdir().unwrap();
+    let engine = Engine::new(Store::open_in_memory().unwrap()).unwrap();
+    engine.register_backend(Arc::new(SeedingBackend));
+    let job = engine
+        .add_download(
+            odm_core::Source::Magnet("magnet:?xt=urn:btih:dummy".to_string()),
+            dir.path().to_path_buf(),
+            JobOptions::default(),
+        )
+        .unwrap();
+    let mut rx = engine.subscribe();
+
+    engine.run(job.id()).await.unwrap();
+
+    let mut states = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        if let Event::JobStateChanged { id, state } = event
+            && id == job.id()
+        {
+            states.push(state);
+        }
+    }
+    let seeding = states.iter().position(|s| *s == JobState::Seeding);
+    let completed = states.iter().position(|s| *s == JobState::Completed);
+    assert!(
+        seeding.is_some() && seeding < completed,
+        "states: {states:?}"
+    );
+}

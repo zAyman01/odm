@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use tokio::sync::{mpsc, watch};
 
-use crate::job::{BackendKind, Job, JobOptions, ProbeResult, Source};
+use crate::job::{BackendKind, Job, JobOptions, JobState, ProbeResult, Source};
 use crate::limiter::Limiter;
 use crate::store::{Store, StoreError};
 
@@ -84,6 +84,8 @@ impl ControlToken {
 pub struct ProgressUpdate {
     pub downloaded_bytes: u64,
     pub total_bytes: Option<u64>,
+    /// A state the backend moved the job into itself, such as `Seeding`.
+    pub state: Option<JobState>,
 }
 
 /// The sending half of a job's progress channel.
@@ -103,6 +105,17 @@ impl ProgressSink {
         let _ = self.sender.send(ProgressUpdate {
             downloaded_bytes,
             total_bytes,
+            state: None,
+        });
+    }
+
+    /// Tells the engine the backend moved the job into `state`, so it can
+    /// announce the change. The backend has already stored the new state.
+    pub fn report_state(&self, state: JobState, downloaded_bytes: u64, total_bytes: Option<u64>) {
+        let _ = self.sender.send(ProgressUpdate {
+            downloaded_bytes,
+            total_bytes,
+            state: Some(state),
         });
     }
 }

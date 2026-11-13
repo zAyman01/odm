@@ -125,9 +125,33 @@ impl AppState {
         tokio::spawn(async move {
             let permit = sem.acquire().await;
             if !waits_as_queued || is_queued(&engine) {
-                let _ = engine.run(id).await;
+                run_releasing_slot_when_seeding(&engine, id, permit).await;
             }
-            drop(permit);
         });
     }
+}
+
+/// Runs the job and frees its queue slot as soon as it starts seeding, since
+/// seeding uploads only and must not block the queued downloads behind it.
+async fn run_releasing_slot_when_seeding(
+    engine: &odm_core::Engine,
+    id: JobId,
+    permit: Result<tokio::sync::SemaphorePermit<'_>, tokio::sync::AcquireError>,
+) {
+    let mut events = engine.subscribe();
+    let run = engine.run(id);
+    tokio::pin!(run);
+    let mut permit = permit.ok();
+    while permit.is_some() {
+        tokio::select! {
+            _ = &mut run => return,
+            event = events.recv() => match event {
+                Ok(odm_core::Event::JobStateChanged { id: changed, state: odm_core::JobState::Seeding })
+                    if changed == id => permit = None,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                _ => {}
+            },
+        }
+    }
+    let _ = run.await;
 }

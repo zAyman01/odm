@@ -837,7 +837,7 @@ pub async fn get_settings_handler(
         .ok()
         .flatten()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(0.0);
+        .unwrap_or(odm_torrent::DEFAULT_SEED_RATIO);
     let torrent_listen_port = store
         .get_setting("torrent_listen_port")
         .ok()

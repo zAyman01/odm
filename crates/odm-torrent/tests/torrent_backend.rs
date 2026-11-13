@@ -10,7 +10,7 @@ use librqbit::{
     create_torrent,
 };
 use odm_core::backend::{Backend, ControlToken, JobContext, ProgressSink, RunOutcome};
-use odm_core::job::{BackendKind, Job, JobOptions, Source};
+use odm_core::job::{BackendKind, Job, JobOptions, JobState, Source};
 use odm_core::limiter::{Limiter, TokenBucket};
 use odm_core::store::Store;
 use odm_torrent::TorrentBackend;
@@ -409,4 +409,77 @@ async fn magnet_job_downloads_into_target_dir_with_selected_files() {
     let skipped = fs::metadata(target_dir.path().join("a.bin")).map_or(0, |m| m.len());
     assert_eq!(skipped, 0, "the unselected file must not be downloaded");
     assert!(!session_dir.path().join("b.bin").exists());
+}
+
+#[tokio::test]
+async fn seeding_emits_state_event() {
+    let harness = setup_seeder().await;
+    let leecher_dir = TempDir::new().unwrap();
+    let leecher_session = Session::new_with_opts(
+        leecher_dir.path().to_path_buf(),
+        SessionOptions {
+            dht: None,
+            persistence: None,
+            disable_trackers: true,
+            listen: Some(ListenerOptions {
+                listen_addr: "127.0.0.1:0".parse().unwrap(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    // Nobody downloads from the leecher, so a ratio of 1.0 is never reached
+    // and the job keeps seeding until it is cancelled.
+    let backend = Arc::new(TorrentBackend::new_with_session(leecher_session, 1.0));
+
+    let store = Store::open_in_memory().unwrap();
+    let mut job = Job::new(
+        Source::Magnet(harness.magnet_uri.clone()),
+        leecher_dir.path().to_path_buf(),
+        JobOptions::default(),
+    );
+    job.set_backend(BackendKind::Torrent);
+    job.set_filename("test_file.bin");
+    store.insert_job(&mut job).unwrap();
+
+    let (control_handle, control_token) = ControlToken::new();
+    let (progress_sink, mut progress_rx) = ProgressSink::new();
+    let ctx = JobContext {
+        job,
+        control: control_token,
+        progress: progress_sink,
+        store,
+        limiter: Limiter::new(Arc::new(TokenBucket::new(0)), None),
+    };
+    let run = tokio::spawn({
+        let backend = backend.clone();
+        async move { backend.run(ctx).await }
+    });
+
+    let announced = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while let Some(update) = progress_rx.recv().await {
+            if update.state == Some(JobState::Seeding) {
+                return Some(update);
+            }
+        }
+        None
+    })
+    .await
+    .expect("the backend should announce seeding");
+    let announced = announced.expect("progress channel closed before seeding");
+    assert_eq!(announced.downloaded_bytes, harness.test_bytes.len() as u64);
+
+    control_handle.cancel();
+    assert_eq!(run.await.unwrap().unwrap(), RunOutcome::Cancelled);
+}
+
+#[tokio::test]
+async fn default_seed_ratio_is_one() {
+    let dir = TempDir::new().unwrap();
+    let backend = TorrentBackend::new(dir.path().to_path_buf(), 0)
+        .await
+        .unwrap();
+    assert_eq!(backend.default_seed_ratio(), 1.0);
 }
