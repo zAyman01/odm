@@ -134,15 +134,26 @@ impl Engine {
         Ok(())
     }
 
-    /// Pauses a running job.
+    /// Pauses a running job, or a queued job that has not started yet.
     pub fn pause(&self, id: JobId) -> Result<(), EngineError> {
-        let map = self.controls.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(handle) = map.get(&id) {
-            handle.pause();
-            Ok(())
-        } else {
-            Err(EngineError::NotRunning(id))
+        {
+            let map = self.controls.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(handle) = map.get(&id) {
+                handle.pause();
+                return Ok(());
+            }
         }
+        let mut job = self.store.get_job(id)?;
+        if job.state() != JobState::Queued {
+            return Err(EngineError::NotRunning(id));
+        }
+        job.transition_to(JobState::Paused)?;
+        self.store.update_job(&job)?;
+        let _ = self.events.send(Event::JobStateChanged {
+            id,
+            state: JobState::Paused,
+        });
+        Ok(())
     }
 
     /// Cancels a running or queued job.

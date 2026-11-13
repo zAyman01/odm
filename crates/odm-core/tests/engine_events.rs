@@ -116,3 +116,35 @@ async fn engine_emits_added_state_and_removed_events() {
     let removed_event = rx.recv().await.unwrap();
     assert_eq!(removed_event, Event::JobRemoved(id));
 }
+
+#[tokio::test]
+async fn pause_queued_job_moves_it_to_paused() {
+    let store = Store::open_in_memory().unwrap();
+    let engine = Engine::new(store.clone()).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let job = engine
+        .add(
+            "http://127.0.0.1:1/file.bin",
+            dir.path().to_path_buf(),
+            JobOptions::default(),
+        )
+        .unwrap();
+    let mut rx = engine.subscribe();
+
+    engine.pause(job.id()).unwrap();
+
+    assert_eq!(store.get_job(job.id()).unwrap().state(), JobState::Paused);
+    let mut saw_paused = false;
+    while let Ok(event) = rx.try_recv() {
+        if matches!(
+            event,
+            Event::JobStateChanged {
+                state: JobState::Paused,
+                ..
+            }
+        ) {
+            saw_paused = true;
+        }
+    }
+    assert!(saw_paused, "no JobStateChanged{{Paused}} event");
+}

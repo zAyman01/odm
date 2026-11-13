@@ -114,9 +114,19 @@ impl AppState {
     pub fn spawn_download(&self, id: JobId, queue_name: &str, max_concurrent: u32) {
         let sem = self.get_semaphore(queue_name, max_concurrent);
         let engine = self.engine.clone();
+        let is_queued = move |engine: &odm_core::Engine| {
+            engine
+                .store()
+                .get_job(id)
+                .is_ok_and(|job| job.state() == odm_core::JobState::Queued)
+        };
+        // A job that waits for a slot as `Queued` may be paused or cancelled meanwhile.
+        let waits_as_queued = is_queued(&engine);
         tokio::spawn(async move {
             let permit = sem.acquire().await;
-            let _ = engine.run(id).await;
+            if !waits_as_queued || is_queued(&engine) {
+                let _ = engine.run(id).await;
+            }
             drop(permit);
         });
     }

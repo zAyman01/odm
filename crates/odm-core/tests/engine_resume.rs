@@ -200,6 +200,8 @@ async fn pausing_a_job_that_is_not_running_is_reported() {
             JobOptions::default(),
         )
         .unwrap();
+    // A queued job can be paused now, so use a job that is finished instead.
+    engine.cancel(job.id()).unwrap();
 
     match engine.pause(job.id()) {
         Err(EngineError::NotRunning(id)) => assert_eq!(id, job.id()),

@@ -168,3 +168,28 @@ async fn queued_jobs_start_after_restart() {
     }
     assert_eq!(final_state, JobState::Completed);
 }
+
+#[tokio::test]
+async fn paused_waiting_job_does_not_start_when_slot_frees() {
+    use odm_daemon::config::DaemonConfig;
+    use odm_daemon::state::AppState;
+
+    let dir = tempdir().unwrap();
+    let store = Store::open(dir.path().join("test.sqlite")).unwrap();
+    let mut job = sample_job(dir.path());
+    store.insert_job(&mut job).unwrap();
+    let engine = Engine::new(store).unwrap();
+    let state = AppState::new(engine.clone(), DaemonConfig::for_test(dir.path(), "t"));
+
+    let slot = state.get_semaphore("busy", 1);
+    let held = slot.clone().acquire_owned().await.unwrap();
+    state.spawn_download(job.id(), "busy", 1);
+    engine.pause(job.id()).unwrap();
+    drop(held);
+
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(
+        engine.store().get_job(job.id()).unwrap().state(),
+        JobState::Paused
+    );
+}
