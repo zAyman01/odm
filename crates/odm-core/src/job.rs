@@ -132,6 +132,8 @@ pub struct JobOptions {
     pub selected_files: Option<Vec<u32>>,
     pub seed_ratio: Option<f64>,
     pub quality: Option<String>,
+    /// How many times a failed request is retried; `None` uses the built-in maximum.
+    pub retry_count: Option<u32>,
 }
 
 fn default_filename() -> String {

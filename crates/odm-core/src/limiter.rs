@@ -1,5 +1,6 @@
 //! Shared token-bucket rate limiting.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -12,7 +13,7 @@ struct BucketState {
 
 /// A token bucket that refills at a byte rate.
 pub struct TokenBucket {
-    rate: u64,
+    rate: AtomicU64,
     state: Mutex<BucketState>,
 }
 
@@ -20,7 +21,7 @@ impl TokenBucket {
     /// Creates a bucket refilling at `bytes_per_second`; zero means unlimited.
     pub fn new(bytes_per_second: u64) -> Self {
         Self {
-            rate: bytes_per_second,
+            rate: AtomicU64::new(bytes_per_second),
             state: Mutex::new(BucketState {
                 tokens: 0.0,
                 last_refill: None,
@@ -33,13 +34,20 @@ impl TokenBucket {
         Self::new(0)
     }
 
+    /// Changes the refill rate of a bucket that is already in use; `None` or
+    /// zero means unlimited. Waiters see the new rate on their next check.
+    pub fn set_rate(&self, bytes_per_second: Option<u64>) {
+        self.rate
+            .store(bytes_per_second.unwrap_or(0), Ordering::Relaxed);
+    }
+
     /// Takes `bytes` tokens, waiting until the bucket has refilled enough.
     pub async fn acquire(&self, bytes: u64) {
-        if self.rate == 0 || bytes == 0 {
-            return;
-        }
-
         loop {
+            let rate = self.rate.load(Ordering::Relaxed);
+            if rate == 0 || bytes == 0 {
+                return;
+            }
             let wait = {
                 let mut state = self
                     .state
@@ -52,7 +60,7 @@ impl TokenBucket {
                     .unwrap_or_default();
                 state.last_refill = Some(now);
 
-                let rate = self.rate as f64;
+                let rate = rate as f64;
                 let cap = rate.max(bytes as f64);
                 state.tokens = (state.tokens + elapsed.as_secs_f64() * rate).min(cap);
 

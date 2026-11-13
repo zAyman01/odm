@@ -193,3 +193,193 @@ async fn paused_waiting_job_does_not_start_when_slot_frees() {
         JobState::Paused
     );
 }
+
+mod settings_take_effect {
+    use axum::Router;
+    use axum::http::StatusCode;
+    use axum::http::header::{AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, HOST};
+    use axum::response::IntoResponse;
+    use axum::routing::get;
+    use odm_api::{AddDownloadRequest, AddDownloadResponse};
+    use odm_core::{Engine, JobId, JobState, Store};
+    use odm_daemon::config::DaemonConfig;
+    use odm_daemon::server::build_router_with_state;
+    use odm_daemon::state::AppState;
+    use tempfile::tempdir;
+    use tokio::net::TcpListener;
+    use tower::ServiceExt;
+
+    fn state_in(dir: &std::path::Path) -> AppState {
+        let engine = Engine::new(Store::open_in_memory().unwrap()).unwrap();
+        AppState::new(engine, DaemonConfig::for_test(dir, "secret"))
+    }
+
+    async fn send(
+        app: &Router,
+        method: &str,
+        uri: &str,
+        body: serde_json::Value,
+    ) -> (StatusCode, Vec<u8>) {
+        let req = axum::http::Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(HOST, "127.0.0.1")
+            .header(AUTHORIZATION, "Bearer secret")
+            .header(CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        (status, bytes.to_vec())
+    }
+
+    async fn add(app: &Router, url: String, dir: &std::path::Path, queue: Option<&str>) -> i64 {
+        let body = serde_json::to_value(AddDownloadRequest {
+            url,
+            target_dir: Some(dir.to_string_lossy().to_string()),
+            filename: None,
+            queue: queue.map(str::to_string),
+            category: None,
+            options: None,
+            backend: None,
+        })
+        .unwrap();
+        let (status, bytes) = send(app, "POST", "/api/v1/downloads", body).await;
+        assert_eq!(status, StatusCode::OK);
+        serde_json::from_slice::<AddDownloadResponse>(&bytes)
+            .unwrap()
+            .id
+    }
+
+    #[tokio::test]
+    async fn default_segments_setting_used() {
+        let dir = tempdir().unwrap();
+        let state = state_in(dir.path());
+        let app = build_router_with_state(state.clone());
+        send(
+            &app,
+            "PATCH",
+            "/api/v1/settings",
+            serde_json::json!({"default_segments": 3}),
+        )
+        .await;
+
+        let id = add(&app, "http://127.0.0.1:9/never".into(), dir.path(), None).await;
+
+        let job = state.engine.store().get_job(JobId(id)).unwrap();
+        assert_eq!(job.options().segments, Some(3));
+    }
+
+    #[tokio::test]
+    async fn default_retry_count_setting_used() {
+        let dir = tempdir().unwrap();
+        let state = state_in(dir.path());
+        let app = build_router_with_state(state.clone());
+        send(
+            &app,
+            "PATCH",
+            "/api/v1/settings",
+            serde_json::json!({"default_retry_count": 2}),
+        )
+        .await;
+
+        let id = add(&app, "http://127.0.0.1:9/never".into(), dir.path(), None).await;
+
+        let job = state.engine.store().get_job(JobId(id)).unwrap();
+        assert_eq!(job.options().retry_count, Some(2));
+    }
+
+    #[tokio::test]
+    async fn global_limit_setting_slows_download() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let origin = Router::new().route(
+            "/slow.bin",
+            get(|| async {
+                let body = vec![b's'; 128 * 1024];
+                (
+                    StatusCode::OK,
+                    [
+                        (CONTENT_TYPE, "application/octet-stream"),
+                        (CONTENT_LENGTH, "131072"),
+                    ],
+                    body,
+                )
+                    .into_response()
+            }),
+        );
+        tokio::spawn(async move {
+            axum::serve(listener, origin).await.unwrap();
+        });
+
+        let dir = tempdir().unwrap();
+        let state = state_in(dir.path());
+        let app = build_router_with_state(state.clone());
+        send(
+            &app,
+            "PATCH",
+            "/api/v1/settings",
+            serde_json::json!({"global_speed_limit": 65536}),
+        )
+        .await;
+
+        let started = std::time::Instant::now();
+        let id = add(&app, format!("http://{addr}/slow.bin"), dir.path(), None).await;
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                let done = state
+                    .engine
+                    .store()
+                    .get_job(JobId(id))
+                    .is_ok_and(|job| job.state() == JobState::Completed);
+                if done {
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("download should complete");
+
+        // 128 KiB at 64 KiB/s cannot finish in under about two seconds.
+        assert!(started.elapsed() >= std::time::Duration::from_millis(1500));
+    }
+
+    #[tokio::test]
+    async fn queue_limit_change_takes_effect_without_restart() {
+        let dir = tempdir().unwrap();
+        let state = state_in(dir.path());
+        state.engine.store().create_queue("bulk", 1).unwrap();
+        let semaphore = state.get_semaphore("bulk", 1);
+        let app = build_router_with_state(state);
+        assert_eq!(semaphore.available_permits(), 1);
+
+        let (status, _) = send(
+            &app,
+            "PATCH",
+            "/api/v1/queues/bulk",
+            serde_json::json!({"max_concurrent": 3}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(semaphore.available_permits(), 3);
+
+        send(
+            &app,
+            "PATCH",
+            "/api/v1/queues/bulk",
+            serde_json::json!({"max_concurrent": 1}),
+        )
+        .await;
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while semaphore.available_permits() != 1 {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("a lower limit must retire the extra slots");
+    }
+}

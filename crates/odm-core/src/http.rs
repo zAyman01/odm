@@ -550,6 +550,13 @@ async fn download_segment(
         .await?;
 
     let mut attempt = 0;
+    let max_retries = ctx
+        .job
+        .options()
+        .retry_count
+        .map_or(RETRY_DELAYS_SECS.len(), |count| {
+            (count as usize).min(RETRY_DELAYS_SECS.len())
+        });
     loop {
         if ctx.control.is_cancelled() || ctx.control.is_paused() {
             return Ok(None);
@@ -602,7 +609,7 @@ async fn download_segment(
                 if has_other_mirrors {
                     continue;
                 }
-                if attempt < RETRY_DELAYS_SECS.len() {
+                if attempt < max_retries {
                     sleep(Duration::from_secs(RETRY_DELAYS_SECS[attempt])).await;
                     attempt += 1;
                     continue;
@@ -621,7 +628,7 @@ async fn download_segment(
             if has_other_mirrors {
                 continue;
             }
-            if attempt < RETRY_DELAYS_SECS.len() {
+            if attempt < max_retries {
                 sleep(Duration::from_secs(RETRY_DELAYS_SECS[attempt])).await;
                 attempt += 1;
                 continue;
@@ -712,7 +719,7 @@ async fn download_segment(
             }
 
             if let Some(err) = stream_err {
-                if attempt < RETRY_DELAYS_SECS.len() {
+                if attempt < max_retries {
                     sleep(Duration::from_secs(RETRY_DELAYS_SECS[attempt])).await;
                     attempt += 1;
                     continue;
@@ -724,7 +731,7 @@ async fn download_segment(
             file.flush().await?;
             break;
         } else if status.as_u16() == 408 || status.as_u16() == 429 || status.is_server_error() {
-            if attempt < RETRY_DELAYS_SECS.len() {
+            if attempt < max_retries {
                 sleep(Duration::from_secs(RETRY_DELAYS_SECS[attempt])).await;
                 attempt += 1;
                 continue;

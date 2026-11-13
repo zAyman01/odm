@@ -23,7 +23,13 @@ pub struct AppState {
     pub ytdlp: Option<Arc<YtDlpBackend>>,
     pub plugins: Arc<RwLock<PluginRegistry>>,
     pub http_client: Client,
-    semaphores: Arc<Mutex<HashMap<String, Arc<Semaphore>>>>,
+    semaphores: Arc<Mutex<HashMap<String, QueueSlots>>>,
+}
+
+/// The slots of one queue and the limit they were sized for.
+struct QueueSlots {
+    semaphore: Arc<Semaphore>,
+    limit: u32,
 }
 
 impl AppState {
@@ -41,7 +47,7 @@ impl AppState {
             .build()
             .unwrap_or_default();
 
-        Self {
+        let state = Self {
             engine,
             config,
             torrent: None,
@@ -51,7 +57,9 @@ impl AppState {
             plugins,
             http_client,
             semaphores: Arc::new(Mutex::new(HashMap::new())),
-        }
+        };
+        state.apply_global_speed_limit();
+        state
     }
 
     pub fn with_http_client(mut self, client: Client) -> Self {
@@ -87,8 +95,48 @@ impl AppState {
     pub fn get_semaphore(&self, queue_name: &str, max_concurrent: u32) -> Arc<Semaphore> {
         let mut map = self.semaphores.lock().unwrap_or_else(|p| p.into_inner());
         map.entry(queue_name.to_string())
-            .or_insert_with(|| Arc::new(Semaphore::new(max_concurrent.max(1) as usize)))
+            .or_insert_with(|| QueueSlots {
+                semaphore: Arc::new(Semaphore::new(max_concurrent.max(1) as usize)),
+                limit: max_concurrent.max(1),
+            })
+            .semaphore
             .clone()
+    }
+
+    /// Resizes a queue's slots. A higher limit adds slots at once; a lower one
+    /// retires slots as running jobs finish, and never stops a running job.
+    pub fn set_queue_limit(&self, queue_name: &str, max_concurrent: u32) {
+        let new_limit = max_concurrent.max(1);
+        let mut map = self.semaphores.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(slots) = map.get_mut(queue_name) else {
+            return;
+        };
+        let old_limit = std::mem::replace(&mut slots.limit, new_limit);
+        if new_limit > old_limit {
+            slots
+                .semaphore
+                .add_permits((new_limit - old_limit) as usize);
+        } else if new_limit < old_limit {
+            let semaphore = slots.semaphore.clone();
+            let surplus = old_limit - new_limit;
+            tokio::spawn(async move {
+                if let Ok(permits) = semaphore.acquire_many_owned(surplus).await {
+                    permits.forget();
+                }
+            });
+        }
+    }
+
+    /// Applies the stored `global_speed_limit` setting to the running engine.
+    pub fn apply_global_speed_limit(&self) {
+        let limit = self
+            .engine
+            .store()
+            .get_setting("global_speed_limit")
+            .ok()
+            .flatten()
+            .and_then(|value| value.parse::<u64>().ok());
+        self.engine.set_global_speed_limit(limit);
     }
 
     /// Starts every job that is still `Queued`, for example after a daemon restart.

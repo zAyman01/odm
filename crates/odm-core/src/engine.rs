@@ -69,6 +69,11 @@ impl Engine {
         &self.store
     }
 
+    /// Sets the speed limit shared by all downloads; `None` or zero removes it.
+    pub fn set_global_speed_limit(&self, bytes_per_second: Option<u64>) {
+        self.limiter.set_rate(bytes_per_second);
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.events.subscribe()
     }

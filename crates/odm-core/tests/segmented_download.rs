@@ -455,3 +455,55 @@ async fn single_stream_pause_discards_the_partial_file() {
     assert_eq!(outcome, RunOutcome::Paused);
     assert!(!job.part_path().exists());
 }
+
+#[tokio::test]
+async fn retry_count_option_limits_the_attempts_after_server_errors() {
+    let gets = Arc::new(AtomicUsize::new(0));
+    let counter = gets.clone();
+    let app = Router::new().route(
+        "/flaky.bin",
+        any(move |method: Method| {
+            let counter = counter.clone();
+            async move {
+                if method == Method::HEAD {
+                    return (
+                        StatusCode::OK,
+                        [
+                            (header::CONTENT_LENGTH, "131072"),
+                            (header::ACCEPT_RANGES, "bytes"),
+                        ],
+                    )
+                        .into_response();
+                }
+                counter.fetch_add(1, Ordering::SeqCst);
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            }
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let dir = TempDir::new().unwrap();
+    let engine = odm_core::Engine::new(Store::open_in_memory().unwrap()).unwrap();
+    let job = engine
+        .add(
+            &format!("http://{addr}/flaky.bin"),
+            dir.path().to_path_buf(),
+            JobOptions {
+                segments: Some(1),
+                retry_count: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let result = tokio::time::timeout(Duration::from_secs(8), engine.run(job.id()))
+        .await
+        .expect("retry_count must cap the retries");
+
+    assert!(result.is_err());
+    assert_eq!(gets.load(Ordering::SeqCst), 2);
+}

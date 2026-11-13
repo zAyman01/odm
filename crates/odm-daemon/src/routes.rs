@@ -539,6 +539,21 @@ pub async fn add_download_handler(
         }
     }
 
+    // Settings fill in what the request left open.
+    let stored_setting = |key: &str| -> Option<u32> {
+        store
+            .get_setting(key)
+            .ok()
+            .flatten()
+            .and_then(|value| value.parse().ok())
+    };
+    if options.segments.is_none() {
+        options.segments = stored_setting("default_segments");
+    }
+    if options.retry_count.is_none() {
+        options.retry_count = stored_setting("default_retry_count");
+    }
+
     let queue_name = req.queue.unwrap_or_else(|| "default".to_string());
     let queue = match store.queue_by_name(&queue_name) {
         Ok(q) => q,
@@ -795,6 +810,7 @@ pub async fn update_queue_handler(
                 Json(ErrorResponse::new("update_queue_failed", e.to_string())),
             )
         })?;
+    state.set_queue_limit(&name, updated.max_concurrent);
 
     Ok(Json(queue_to_dto(updated)))
 }
@@ -899,6 +915,7 @@ pub async fn update_settings_handler(
     if let Some(ref p) = req.ytdlp_path {
         let _ = store.set_setting("ytdlp_path", p);
     }
+    state.apply_global_speed_limit();
 
     get_settings_handler(State(state)).await
 }

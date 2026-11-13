@@ -47,3 +47,19 @@ fn job_options_deserialize_with_new_field_defaults() {
     assert_eq!(options.segments, None);
     assert_eq!(options.speed_limit, None);
 }
+
+#[tokio::test(start_paused = true)]
+async fn set_rate_changes_an_existing_bucket() {
+    let bucket = TokenBucket::unlimited();
+
+    bucket.set_rate(Some(1000));
+    let start = Instant::now();
+    bucket.acquire(500).await;
+    bucket.acquire(500).await;
+    assert_eq!(start.elapsed(), Duration::from_millis(1000));
+
+    bucket.set_rate(None);
+    let start = Instant::now();
+    bucket.acquire(1_000_000).await;
+    assert_eq!(start.elapsed(), Duration::ZERO);
+}
