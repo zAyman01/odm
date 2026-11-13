@@ -27,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     tracing_subscriber::fmt::init();
 
-    let config = DaemonConfig::load_or_init(args.config_dir, args.data_dir, args.bind);
+    let config = DaemonConfig::load_or_init(args.config_dir, args.data_dir, args.bind)?;
     let db_path = config.data_dir.join("odm.sqlite");
     let store = Store::open(&db_path)?;
     let engine = Engine::new(store.clone())?;

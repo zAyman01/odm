@@ -21,7 +21,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
     let authenticated = match auth_msg {
         Ok(Some(Ok(Message::Text(text)))) => {
             if let Ok(req) = serde_json::from_str::<WsAuthRequest>(&text) {
-                req.token == state.config.token
+                crate::auth::token_matches(&state.config.token, &req.token)
             } else {
                 false
             }

@@ -41,6 +41,12 @@ pub async fn validate_host_header(
     Ok(next.run(req).await)
 }
 
+/// Returns true when `provided` is the configured token. An empty configured token
+/// never matches, so a blank token file cannot grant access.
+pub fn token_matches(expected: &str, provided: &str) -> bool {
+    !expected.is_empty() && expected == provided
+}
+
 /// Middleware verifying the Authorization header carries `Bearer <token>` on protected routes.
 pub async fn require_bearer_token(
     State(expected_token): State<String>,
@@ -65,7 +71,7 @@ pub async fn require_bearer_token(
     let is_authenticated = match auth_header {
         Some(val) if val.starts_with("Bearer ") => {
             let token = val.trim_start_matches("Bearer ").trim();
-            token == expected_token
+            token_matches(&expected_token, token)
         }
         _ => false,
     };
