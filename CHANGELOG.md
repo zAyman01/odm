@@ -7,45 +7,56 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [Unreleased]
 
 ### Added
+- None yet.
 
-- Workspace skeleton, CI and repository files.
-- Core job model, state machine, SQLite persistence and single-stream HTTP downloads.
-- Segmented downloads with dynamic splitting, resume, retry, speed limits and queues.
-- Daemon REST API and WebSocket event streaming under `/api/v1` with bearer authentication, host header rebinding protection and CORS.
-- Command-line client (`odm`) with human-readable and `--json` output modes for download management and daemon control.
-- Desktop graphical user interface (`odm-gui`) built with `eframe`/`egui` featuring download list, toolbar controls, category/queue sidebar, segment visualizer detail panel, add download dialog with live URL probe, settings dialog, dark/light theme, clipboard URL monitoring, and completion notifications.
-- Cryptographic checksum verification (SHA-256, SHA-1, MD5) with streaming integrity checks in `Verifying` state.
+## [0.1.0] - 2026-11-13
+
+### Added
+
+#### Core Engine & Transfers
+- Core job model, SQLite persistence (`rusqlite` bundled), and finite state machine with strict transition validation.
+- Multi-segment HTTP & HTTPS acceleration with dynamic splitting of remaining byte ranges, token-bucket speed limiter, and configurable connection counts (1–32).
+- Crash-resilient download resume using saved segment progress and `ETag`/`Last-Modified` validation.
+- Per-segment exponential-backoff retry logic with transient network error recovery.
+- Priority queue scheduler with concurrency limits and automated queue start/stop schedules.
+- Cryptographic integrity verification (SHA-256, SHA-1, MD5) with streaming verification pass in `Verifying` state.
 - Multi-mirror downloads with dynamic segment distribution and automatic mirror failover.
 - Metalink 3 and Meta4 XML file parser.
 - Batch URL pattern expansion supporting numeric (`[001-100]`) and alphabetic ranges with Cartesian products.
 - File categories mapping extensions to target directories with automatic file routing.
-- Queue scheduling with configurable start/stop times and active weekdays.
-- Full CLI and GUI controls for checksums, mirrors, categories, batch URLs, and schedules.
-- Torrent backend via librqbit: magnet links and .torrent files download through the same interface as HTTP.
-- Torrent file selection: choose which files to download from multi-file torrents.
-- Configurable seeding: seed to a target ratio (default 1.0), then auto-complete. Set ratio to 0 to skip seeding.
-- Torrent settings: listen port and seed ratio configurable from CLI, GUI, and API.
-- Torrent sidebar filter in GUI.
-- DHT, peer exchange, and UPnP port mapping via librqbit.
-- Torrent resume: torrents survive daemon restarts and continue where they left off.
-- HLS backend: download HLS streams from `.m3u8` playlists with quality selection and AES-128 decryption.
-- DASH backend: download DASH streams from `.mpd` manifests with audio+video muxing via ffmpeg.
-- yt-dlp backend: download from any yt-dlp-supported site with format selection and progress tracking.
-- Quality/format selection: probe returns available qualities for HLS, DASH and yt-dlp sources; select via CLI `--quality` flag or GUI dropdown.
-- ffmpeg integration: optional muxing of HLS `.ts` to `.mp4`; required for DASH audio+video muxing.
-- yt-dlp integration: external binary found from settings or PATH; clear error message when missing.
-- Media resume: HLS/DASH downloads resume from saved segment progress after pause or restart.
-- yt-dlp pause/resume: pause kills the process; resume reruns with `--continue`.
-- Settings: `ffmpeg_path` and `ytdlp_path` configurable from CLI, GUI and API.
-- Site Grabber: crawl websites on the same host up to a configurable depth limit with HTML link extraction via `scraper`.
-- `robots.txt` compliance: respects website crawling restrictions by default with configurable bypass option.
-- Link & Asset extraction: collects links and downloadable media from `<a>`, `<img>`, `<source>`, `<video>`, `<audio>`, and `<link>` elements with relative URL normalization.
-- File filtering: filter grabbed files by extension list and/or regex/wildcard pattern with duplicate elimination.
-- External-process plugin host (`odm-plugin`): run custom resolver plugins in any language via JSON stdin/stdout protocol with 30-second timeout isolation and crash protection.
-- Plugin manifest parsing: `plugin.toml` with role validation (`resolver`), commands, and wildcard/regex URL pattern matching.
-- Plugin backend: URLs matching installed plugins automatically route to `BackendKind::Plugin` for resolution and HTTP transfer.
-- Daemon API endpoints: `POST /api/v1/grabber` for site crawling and `GET /api/v1/plugins` for plugin discovery.
-- CLI commands: `odm grab <url>` (with `--depth`, `--ext`, `--pattern`, `--no-robots`, `--max-pages`, `--add`, `--json`) and `odm plugin list` (with `--json` and security disclosure).
-- GUI Grabber & Plugin dialogs: interactive site grabber with results table and batch-adding, and plugin list dialog with prominent security notice.
-- Embedded Web UI served by the daemon at `http://127.0.0.1:6820/` with bearer authentication, real-time download list, live WebSocket event updates, URL addition modal, pause/resume/cancel/remove controls, and responsive layout for mobile browsers.
-- Browser extension for Chromium and Firefox (Manifest V3) with download interception, configurable extension/size/site filters, context menu integration ("Download with odm", "Download all links"), video media detection (.m3u8, .mpd) with toolbar badge counts and send-to-daemon popup.
+
+#### BitTorrent
+- BitTorrent backend integration powered by `librqbit` for magnet links and `.torrent` files.
+- Interactive multi-file torrent selection.
+- Configurable seeding ratio targets (default 1.0, or 0 to disable).
+- DHT, peer exchange (PEX), and UPnP port mapping.
+- Torrent state persistence surviving daemon restarts.
+
+#### Media & Streams
+- HLS backend for `.m3u8` playlists with stream quality probe, format selection, and AES-128 decryption.
+- DASH backend for `.mpd` manifests with multi-track audio and video extraction.
+- Automatic audio and video track muxing via `ffmpeg`.
+- yt-dlp backend with probe discovery, format selection, child-process progress tracking, and rate limiting.
+
+#### Site Grabber & Plugins
+- Site grabber crawler with depth limits, `robots.txt` compliance, duplicate elimination, and link extraction from `<a>`, `<img>`, `<source>`, `<video>`, `<audio>`, and `<link>` HTML tags via `scraper`.
+- Out-of-process resolver plugin architecture (`odm-plugin`) with JSON stdin/stdout protocol, 30-second timeout isolation, and process crash containment.
+- Plugin manifest parser (`plugin.toml`) supporting wildcard globbing and regex URL patterns.
+
+#### Clients & User Interfaces
+- Desktop GUI (`odm-gui`) built with `egui`/`eframe` featuring dark/light themes, segment visualizer, download table, add download dialog with live URL probe, category/queue sidebar, system tray icon, completion notifications, and URL clipboard monitoring.
+- Command-line client (`odm`) with human-readable and `--json` output modes for downloads, queues, grabber, and plugin management.
+- Headless background daemon (`odm-daemon`) with `axum` HTTP and WebSocket API under `/api/v1`.
+- Embedded responsive single-page Web UI (`webui/`) served directly by the daemon at `http://127.0.0.1:6820/` with live WebSocket progress updates and job controls.
+- Browser extension for Chromium and Firefox (Manifest V3) with download interception, configurable filters, context menu integration ("Download with odm", "Download all links"), and video media detection (.m3u8, .mpd) with badge count.
+
+#### Packaging & Release CI/CD
+- Cross-platform extension packaging script (`scripts/package-extension.mjs`) generating Chrome and Firefox ZIP bundles with manifest transformation and unit test suite.
+- GitHub Actions release CI/CD workflow (`.github/workflows/release.yml`) triggered on `v*` tags, building release binaries for Windows (x86_64), Linux (x86_64), macOS (Intel & Apple Silicon), generating `SHA256SUMS.txt`, and publishing release assets.
+- Complete documentation overhaul covering installation, usage, architecture, external dependencies, and OS unsigned binary notices for Windows SmartScreen and macOS Gatekeeper.
+
+### Security
+- Cryptographic bearer token authentication on all daemon REST endpoints and WebSocket streams.
+- Host header validation to prevent DNS rebinding attacks.
+- Strict CORS rules scoped to the daemon origin and browser extension.
+- Clear security disclosures and UI warnings for un-sandboxed plugin execution.
