@@ -501,6 +501,9 @@ pub async fn add_download_handler(
     if let Some(ref opts) = req.options {
         options.segments = opts.segments;
         options.speed_limit = opts.speed_limit;
+        if let Some(ref headers) = opts.headers {
+            options.headers = headers.clone();
+        }
         if let Some(ref ua) = opts.user_agent {
             options.user_agent = Some(ua.clone());
         }

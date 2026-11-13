@@ -209,3 +209,85 @@ async fn full_rest_lifecycle_test() {
     let settings: SettingsDto = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(settings.default_segments, 12);
 }
+
+#[tokio::test]
+async fn add_forwards_custom_headers_to_origin() {
+    let seen: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let recorder = seen.clone();
+    let origin = Router::new().route(
+        "/headers.bin",
+        get(move |headers: axum::http::HeaderMap| {
+            let recorder = recorder.clone();
+            async move {
+                if let Some(value) = headers.get("x-test").and_then(|v| v.to_str().ok()) {
+                    recorder.lock().unwrap().push(value.to_string());
+                }
+                (
+                    StatusCode::OK,
+                    [(CONTENT_TYPE, "application/octet-stream")],
+                    vec![b'h'; 1024],
+                )
+                    .into_response()
+            }
+        }),
+    );
+    tokio::spawn(async move {
+        axum::serve(listener, origin).await.unwrap();
+    });
+
+    let dir = tempdir().unwrap();
+    let engine = Engine::new(Store::open_in_memory().unwrap()).unwrap();
+    let state = AppState::new(engine, DaemonConfig::for_test(dir.path(), "secret"));
+    let app = build_router_with_state(state.clone());
+
+    let add_body = serde_json::to_vec(&AddDownloadRequest {
+        url: format!("http://{addr}/headers.bin"),
+        target_dir: Some(dir.path().to_string_lossy().to_string()),
+        filename: None,
+        queue: None,
+        category: None,
+        options: Some(odm_api::JobOptionsDto {
+            headers: Some(vec![("X-Test".to_string(), "1".to_string())]),
+            ..Default::default()
+        }),
+        backend: None,
+    })
+    .unwrap();
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/api/v1/downloads")
+        .header(HOST, "127.0.0.1")
+        .header(AUTHORIZATION, "Bearer secret")
+        .header(CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(add_body))
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+    let id = serde_json::from_slice::<AddDownloadResponse>(&bytes)
+        .unwrap()
+        .id;
+
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let done = state
+                .engine
+                .store()
+                .get_job(odm_core::JobId(id))
+                .is_ok_and(|job| job.state() == odm_core::JobState::Completed);
+            if done {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("download should complete");
+
+    assert!(
+        seen.lock().unwrap().iter().any(|value| value == "1"),
+        "origin never saw x-test: 1"
+    );
+}
