@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>odm Settings</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div class="options-container">
+    <div class="card">
+      <header>
+        <h1>odm Extension Settings</h1>
+        <p class="subtitle">Configure connection and download interception filters</p>
+      </header>
+
+      <form id="optionsForm">
+        <div class="form-group checkbox-group">
+          <input type="checkbox" id="enabledInput" checked>
+          <label for="enabledInput">Enable download interception</label>
+        </div>
+
+        <div class="form-group">
+          <label for="tokenInput">Bearer Token</label>
+          <div class="input-row">
+            <input type="password" id="tokenInput" class="form-control" placeholder="Daemon bearer token" required autocomplete="current-password">
+            <button type="button" class="btn btn-outline" id="toggleTokenBtn" style="white-space: nowrap;">Show</button>
+          </div>
+          <div class="help-text">Found in your odm config directory (e.g. <code>~/.config/odm/token</code> or <code>%APPDATA%\odm\config\token</code>).</div>
+        </div>
+
+        <div class="form-group">
+          <label for="portInput">Daemon Port</label>
+          <input type="number" id="portInput" class="form-control" value="6820" min="1" max="65535" required>
+          <div class="help-text">Default is 6820.</div>
+        </div>
+
+        <div class="form-group">
+          <label for="minSizeInput">Minimum File Size (KB)</label>
+          <input type="number" id="minSizeInput" class="form-control" value="0" min="0">
+          <div class="help-text">Downloads smaller than this will not be intercepted. 0 = no minimum.</div>
+        </div>
+
+        <div class="form-group">
+          <label for="extensionListInput">File Extensions to Intercept</label>
+          <textarea id="extensionListInput" class="form-control" rows="3" placeholder="zip, exe, msi, ..."></textarea>
+          <div class="help-text">Comma-separated list of extensions. Leave empty to intercept all extensions.</div>
+        </div>
+
+        <div class="form-group">
+          <label for="disabledSitesInput">Disabled Sites</label>
+          <textarea id="disabledSitesInput" class="form-control" rows="3" placeholder="example.com&#10;internal.corp"></textarea>
+          <div class="help-text">One hostname per line. Downloads from these sites will never be intercepted.</div>
+        </div>
+
+        <div class="actions">
+          <button type="button" class="btn btn-outline" id="testConnBtn">Test Connection</button>
+          <button type="submit" class="btn btn-primary" id="saveBtn">Save Settings</button>
+        </div>
+
+        <div id="statusMessage" class="status-msg"></div>
+      </form>
+    </div>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>
