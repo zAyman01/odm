@@ -3,16 +3,16 @@ all-features = true
 
 [advisories]
 ignore = [
-    "RUSTSEC-2024-0436",
-    "RUSTSEC-2024-0370",
-    "RUSTSEC-2026-0192",
-    "RUSTSEC-2026-0194",
-    "RUSTSEC-2026-0195",
-    "RUSTSEC-2026-0370",
-    "RUSTSEC-2026-0371",
-    "RUSTSEC-2026-0372",
-    "RUSTSEC-2025-0060",
-    "RUSTSEC-2026-0293",
+    { id = "RUSTSEC-2025-0060", reason = "unmaintained crypto-hash, pulled in by librqbit 9.1 (sha1 wrapper); no patched release, replace when librqbit moves off it" },
+    { id = "RUSTSEC-2024-0436", reason = "unmaintained paste (proc-macro, build time only), pulled in by eframe/egui; no patched release" },
+    { id = "RUSTSEC-2024-0370", reason = "unmaintained proc-macro-error (proc-macro, build time only), pulled in by dash-mpd in odm-media; no patched release" },
+    { id = "RUSTSEC-2026-0192", reason = "unmaintained ttf-parser, pulled in by eframe/egui font loading of bundled fonts; no patched release" },
+    { id = "RUSTSEC-2026-0370", reason = "unmaintained zvariant, Linux-only D-Bus stack of eframe/egui accessibility; no patched release" },
+    { id = "RUSTSEC-2026-0371", reason = "unmaintained zbus_names, Linux-only D-Bus stack of eframe/egui accessibility; no patched release" },
+    { id = "RUSTSEC-2026-0372", reason = "unmaintained zvariant_derive, Linux-only D-Bus stack of eframe/egui accessibility; no patched release" },
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.30.0 only via zbus_xml in egui 0.31 Linux accessibility; parses local D-Bus introspection XML, not network input; fixed by upgrading egui, which is a major bump; the quick-xml 0.41 and 0.42 copies are already patched" },
+    { id = "RUSTSEC-2026-0195", reason = "quick-xml 0.30.0 only via zbus_xml in egui 0.31 Linux accessibility; parses local D-Bus introspection XML, not network input; fixed by upgrading egui, which is a major bump; the quick-xml 0.41 and 0.42 copies are already patched" },
+    { id = "RUSTSEC-2026-0293", reason = "ringbuf 0.4.8 via librqbit-utp 0.7; librqbit pins ringbuf 0.4 so cargo update cannot reach 0.5.2; the flaw needs a panicking Drop inside the uTP queue; revisit on the next librqbit upgrade" },
 ]
 
 [licenses]
