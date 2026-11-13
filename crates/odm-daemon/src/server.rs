@@ -130,6 +130,7 @@ pub fn init_media_backends(store: &Store, engine: &Engine) -> MediaBackends {
 /// Builds the Axum router for the daemon given the application state.
 pub fn build_router_with_state(state: AppState) -> Router {
     let token = state.config.token.clone();
+    let port = crate::auth::configured_port(&state.config.bind_addr);
 
     let api_routes = Router::new()
         .route("/health", get(health_handler))
@@ -175,7 +176,7 @@ pub fn build_router_with_state(state: AppState) -> Router {
         .route("/{*path}", get(webui_handler))
         .layer(from_fn_with_state(token, require_bearer_token))
         .layer(from_fn(validate_host_header))
-        .layer(create_cors_layer())
+        .layer(create_cors_layer(port))
 }
 
 /// Builds the Axum router for testing from configuration.

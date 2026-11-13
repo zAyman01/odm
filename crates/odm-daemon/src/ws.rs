@@ -3,7 +3,8 @@ use std::time::Duration;
 
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::response::IntoResponse;
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use futures_util::{SinkExt, StreamExt};
 use odm_api::{Event, WsAuthRequest, WsAuthResponse};
 use odm_core::Event as CoreEvent;
@@ -11,8 +12,23 @@ use odm_core::Event as CoreEvent;
 use crate::routes::job_to_dto;
 use crate::state::AppState;
 
-pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
+pub async fn ws_handler(
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+) -> Response {
+    // Browsers always send Origin on WebSocket handshakes; CLI clients send none.
+    if let Some(origin) = headers.get(header::ORIGIN) {
+        let port = crate::auth::configured_port(&state.config.bind_addr);
+        if !origin
+            .to_str()
+            .is_ok_and(|origin| crate::auth::origin_allowed(origin, port))
+        {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+    }
     ws.on_upgrade(move |socket| handle_socket(socket, state))
+        .into_response()
 }
 
 async fn handle_socket(mut socket: WebSocket, state: AppState) {

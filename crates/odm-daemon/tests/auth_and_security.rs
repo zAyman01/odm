@@ -143,3 +143,71 @@ async fn empty_configured_token_does_not_accept_empty_bearer() {
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
+
+#[test]
+fn origin_allowed_accepts_own_port_and_extensions_only() {
+    use odm_daemon::auth::origin_allowed;
+    for origin in [
+        "http://127.0.0.1:6820",
+        "http://localhost:6820",
+        "http://[::1]:6820",
+        "chrome-extension://abcdef",
+        "moz-extension://1234-5678",
+    ] {
+        assert!(origin_allowed(origin, 6820), "{origin} should be allowed");
+    }
+    for origin in [
+        "http://127.0.0.1:9999",
+        "http://localhost:3000",
+        "http://evil.example",
+        "http://127.0.0.1:6820.evil.example",
+        "https://127.0.0.1:6820",
+        "null",
+    ] {
+        assert!(!origin_allowed(origin, 6820), "{origin} should be rejected");
+    }
+}
+
+#[test]
+fn origin_allowed_with_ephemeral_port_accepts_any_loopback_port() {
+    use odm_daemon::auth::origin_allowed;
+    assert!(origin_allowed("http://127.0.0.1:41234", 0));
+    assert!(!origin_allowed("http://evil.example:41234", 0));
+}
+
+async fn preflight(origin: &str) -> Option<String> {
+    let dir = tempdir().unwrap();
+    let mut config = DaemonConfig::for_test(dir.path(), "t");
+    config.bind_addr = "127.0.0.1:6820".to_string();
+    let app = build_router(config).unwrap();
+    let req = Request::builder()
+        .method("OPTIONS")
+        .uri("/api/v1/downloads")
+        .header(header::HOST, "127.0.0.1:6820")
+        .header(header::ORIGIN, origin)
+        .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    resp.headers()
+        .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+}
+
+#[tokio::test]
+async fn cors_rejects_other_localhost_port() {
+    assert_eq!(preflight("http://127.0.0.1:9999").await, None);
+}
+
+#[tokio::test]
+async fn cors_allows_same_port_and_extensions() {
+    assert_eq!(
+        preflight("http://127.0.0.1:6820").await.as_deref(),
+        Some("http://127.0.0.1:6820")
+    );
+    assert_eq!(
+        preflight("chrome-extension://abcdef").await.as_deref(),
+        Some("chrome-extension://abcdef")
+    );
+}

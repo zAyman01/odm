@@ -89,16 +89,43 @@ pub async fn require_bearer_token(
     Ok(next.run(req).await)
 }
 
-/// Creates the CORS layer permitting loopback and browser extension origins.
-pub fn create_cors_layer() -> CorsLayer {
+/// Returns the port of a `host:port` bind address, or 0 when it has none (any port).
+pub fn configured_port(bind_addr: &str) -> u16 {
+    bind_addr
+        .rsplit_once(':')
+        .and_then(|(_, port)| port.parse().ok())
+        .unwrap_or(0)
+}
+
+/// Returns true for the daemon's own web UI origin (loopback on `port`; any loopback
+/// port when `port` is 0) and for browser extension origins. Extension ids differ per
+/// install, and the Bearer token still guards every API call.
+pub fn origin_allowed(origin: &str, port: u16) -> bool {
+    if origin.starts_with("chrome-extension://") || origin.starts_with("moz-extension://") {
+        return true;
+    }
+    let Some((host, origin_port)) = origin
+        .strip_prefix("http://")
+        .and_then(|rest| rest.rsplit_once(':'))
+    else {
+        return false;
+    };
+    matches!(host, "127.0.0.1" | "localhost" | "[::1]")
+        && origin_port
+            .parse::<u16>()
+            .is_ok_and(|origin_port| port == 0 || origin_port == port)
+}
+
+/// Creates the CORS layer permitting the daemon's own origin and browser extensions.
+pub fn create_cors_layer(port: u16) -> CorsLayer {
     CorsLayer::new()
-        .allow_origin(tower_http::cors::AllowOrigin::predicate(|origin, _| {
-            let s = origin.to_str().unwrap_or("");
-            s.starts_with("chrome-extension://")
-                || s.starts_with("moz-extension://")
-                || s.starts_with("http://127.0.0.1:")
-                || s.starts_with("http://localhost:")
-        }))
+        .allow_origin(tower_http::cors::AllowOrigin::predicate(
+            move |origin, _| {
+                origin
+                    .to_str()
+                    .is_ok_and(|origin| origin_allowed(origin, port))
+            },
+        ))
         .allow_methods(Any)
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
 }
