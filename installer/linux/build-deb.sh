@@ -66,4 +66,4 @@ POSTINST
 chmod 0755 "$pkg/DEBIAN/postinst"
 
 mkdir -p "$(dirname "$out")"
-dpkg-deb --build --root-owner-group "$pkg" "$out"
+dpkg-deb -Zxz --build --root-owner-group "$pkg" "$out"
