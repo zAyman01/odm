@@ -8,6 +8,7 @@ use axum::response::{IntoResponse, Response};
 use futures_util::{SinkExt, StreamExt};
 use odm_api::{Event, WsAuthRequest, WsAuthResponse};
 use odm_core::Event as CoreEvent;
+use tokio::sync::broadcast;
 
 use crate::routes::job_to_dto;
 use crate::state::AppState;
@@ -72,7 +73,13 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
 
     // 2. Stream engine events
     let mut rx = state.engine.subscribe();
-    while let Ok(core_event) = rx.recv().await {
+    loop {
+        let core_event = match rx.recv().await {
+            Ok(event) => event,
+            // Slow clients miss events instead of losing the connection.
+            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(broadcast::error::RecvError::Closed) => break,
+        };
         let api_event = match core_event {
             CoreEvent::JobAdded(id) => {
                 if let Ok(job) = state.engine.store().get_job(id) {

@@ -221,17 +221,34 @@ impl Engine {
 
     /// Waits until no run of the job is active, for at most `STOP_TIMEOUT`.
     async fn wait_until_idle(&self, id: JobId) {
+        self.wait_while(STOP_TIMEOUT, |controls| controls.contains_key(&id))
+            .await;
+    }
+
+    /// Polls the active runs until `busy` is false or `limit` has passed.
+    async fn wait_while(
+        &self,
+        limit: std::time::Duration,
+        busy: impl Fn(&HashMap<JobId, ControlHandle>) -> bool,
+    ) {
         let idle = async {
-            while self
-                .controls
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .contains_key(&id)
-            {
+            while busy(&self.controls.lock().unwrap_or_else(|p| p.into_inner())) {
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
         };
-        let _ = tokio::time::timeout(STOP_TIMEOUT, idle).await;
+        let _ = tokio::time::timeout(limit, idle).await;
+    }
+
+    /// Pauses every running job and waits up to `limit` for them to stop.
+    pub async fn pause_all(&self, limit: std::time::Duration) {
+        {
+            let map = self.controls.lock().unwrap_or_else(|p| p.into_inner());
+            for handle in map.values() {
+                handle.pause();
+            }
+        }
+        self.wait_while(limit, |controls| !controls.is_empty())
+            .await;
     }
 
     /// Deletes the partial file and saved segments of a job that will not resume.

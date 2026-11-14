@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use clap::Parser;
 use odm_core::{Engine, Store};
 use odm_daemon::config::DaemonConfig;
-use odm_daemon::server::build_router_with_state;
 use odm_daemon::state::AppState;
 
 #[derive(Parser, Debug)]
@@ -81,7 +80,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     state.resume_queued();
-    let app = build_router_with_state(state);
 
     let listener = match tokio::net::TcpListener::bind(&config.bind_addr).await {
         Ok(listener) => listener,
@@ -92,7 +90,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     println!("odm-daemon listening on http://{}", config.bind_addr);
-    axum::serve(listener, app).await?;
+    odm_daemon::server::serve(listener, state, async {
+        let _ = tokio::signal::ctrl_c().await;
+    })
+    .await?;
 
     Ok(())
 }

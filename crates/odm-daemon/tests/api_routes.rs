@@ -291,3 +291,71 @@ async fn add_forwards_custom_headers_to_origin() {
         "origin never saw x-test: 1"
     );
 }
+
+/// A server that sends a 200-byte file at 20 bytes a second.
+async fn slow_file_server() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new().route(
+        "/slow.bin",
+        get(|| async {
+            let chunks = futures_util::stream::unfold(0_u32, |sent| async move {
+                if sent == 10 {
+                    return None;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                Some((
+                    Ok::<_, std::io::Error>(axum::body::Bytes::from_static(&[b'z'; 20])),
+                    sent + 1,
+                ))
+            });
+            (
+                [(CONTENT_LENGTH, "200")],
+                axum::body::Body::from_stream(chunks),
+            )
+        }),
+    );
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{addr}/slow.bin")
+}
+
+#[tokio::test]
+async fn shutdown_pauses_running_jobs() {
+    let url = slow_file_server().await;
+    let dir = tempdir().unwrap();
+    let engine = Engine::new(Store::open(dir.path().join("odm.sqlite")).unwrap()).unwrap();
+    let state = AppState::new(engine.clone(), DaemonConfig::for_test(dir.path(), "secret"));
+    let job = engine
+        .add(
+            &url,
+            dir.path().to_path_buf(),
+            odm_core::JobOptions::default(),
+        )
+        .unwrap();
+    state.spawn_download(job.id(), "default", 3);
+    for _ in 0..200 {
+        if engine.store().get_job(job.id()).unwrap().state() == odm_core::JobState::Downloading {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(odm_daemon::server::serve(listener, state, async move {
+        let _ = stopped.await;
+    }));
+    stop.send(()).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(10), server)
+        .await
+        .expect("the server did not shut down")
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        engine.store().get_job(job.id()).unwrap().state(),
+        odm_core::JobState::Paused
+    );
+}

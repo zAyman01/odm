@@ -128,6 +128,37 @@ pub fn init_media_backends(store: &Store, engine: &Engine) -> MediaBackends {
 }
 
 /// Builds the Axum router for the daemon given the application state.
+/// How long running jobs get to stop when the server shuts down.
+const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+/// How long open connections get to finish once the jobs have stopped.
+const DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Serves the API until `shutdown` completes, then pauses the running jobs so
+/// they resume on the next start, and lets open connections finish briefly.
+pub async fn serve(
+    listener: tokio::net::TcpListener,
+    state: AppState,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> std::io::Result<()> {
+    let engine = state.engine.clone();
+    let app = build_router_with_state(state);
+    let (drain, drained) = tokio::sync::oneshot::channel::<()>();
+    let server = axum::serve(listener, app).with_graceful_shutdown(async move {
+        let _ = drained.await;
+    });
+    let mut server = std::pin::pin!(server.into_future());
+    tokio::select! {
+        result = &mut server => return result,
+        () = shutdown => {}
+    }
+    engine.pause_all(SHUTDOWN_GRACE).await;
+    let _ = drain.send(());
+    // Long-lived connections such as WebSockets must not hold the shutdown up.
+    tokio::time::timeout(DRAIN_TIMEOUT, server)
+        .await
+        .unwrap_or(Ok(()))
+}
+
 pub fn build_router_with_state(state: AppState) -> Router {
     let token = state.config.token.clone();
     let port = crate::auth::configured_port(&state.config.bind_addr);
