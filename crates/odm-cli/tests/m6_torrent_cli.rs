@@ -269,8 +269,11 @@ async fn torrent_file_path_is_sent_absolute() {
     assert!(info.status.success());
     let detail: odm_api::DownloadDetailDto =
         serde_json::from_str(&String::from_utf8_lossy(&info.stdout)).unwrap();
+    // macOS reaches the temp folder through a symlink (/var -> /private/var), so compare real paths.
+    let sent = std::path::PathBuf::from(&detail.item.url);
+    assert!(sent.is_absolute());
     assert_eq!(
-        std::path::PathBuf::from(&detail.item.url),
-        dir.path().join("relative.torrent")
+        sent.canonicalize().unwrap(),
+        dir.path().join("relative.torrent").canonicalize().unwrap()
     );
 }
