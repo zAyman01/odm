@@ -311,12 +311,13 @@ async fn editing_schedule_keeps_max_concurrent() {
     assert_eq!(body.schedule_start.as_deref(), Some("22:00"));
 }
 
-#[tokio::test(start_paused = true)]
+// Real time: with paused time the runtime can jump past a timeout while the socket is still pending.
+#[tokio::test]
 async fn grab_request_is_not_killed_by_default_timeout() {
     let app = Router::new().route("/api/v1/health", health_route()).route(
         "/api/v1/grabber",
         axum::routing::post(|| async {
-            tokio::time::sleep(Duration::from_secs(12)).await;
+            tokio::time::sleep(Duration::from_secs(11)).await;
             empty_grab()
         }),
     );
@@ -332,7 +333,7 @@ async fn grab_request_is_not_killed_by_default_timeout() {
     assert!(result.is_ok(), "grab failed: {result:?}");
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn actions_run_concurrently() {
     let log: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
     let grab_log = log.clone();
@@ -344,7 +345,7 @@ async fn actions_run_concurrently() {
             axum::routing::post(move || {
                 let log = grab_log.clone();
                 async move {
-                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    tokio::time::sleep(Duration::from_secs(2)).await;
                     log.lock().unwrap().push("grab_done");
                     empty_grab()
                 }
