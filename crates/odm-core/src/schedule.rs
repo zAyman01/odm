@@ -6,30 +6,31 @@ pub trait Clock: Send + Sync {
     fn now(&self) -> (String, String);
 }
 
-/// System clock using UTC time calculation.
+/// Weekday abbreviations in calendar order, as used by schedules.
+const WEEKDAYS: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+
+/// System clock reading the host's local time zone, so schedules mean wall-clock time.
 pub struct SystemClock;
 
 impl Clock for SystemClock {
     fn now(&self) -> (String, String) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let day_secs = now % 86400;
-        let hours = day_secs / 3600;
-        let minutes = (day_secs % 3600) / 60;
-        let days = now / 86400;
-        let weekday = match (days + 4) % 7 {
-            0 => "sun",
-            1 => "mon",
-            2 => "tue",
-            3 => "wed",
-            4 => "thu",
-            5 => "fri",
-            _ => "sat",
-        };
-        (weekday.to_string(), format!("{hours:02}:{minutes:02}"))
+        use chrono::Datelike;
+
+        let now = chrono::Local::now();
+        (
+            WEEKDAYS[now.weekday().num_days_from_monday() as usize].to_string(),
+            now.format("%H:%M").to_string(),
+        )
     }
+}
+
+/// Returns the weekday before `day`, or `day` itself when it is not a weekday name.
+fn previous_day(day: &str) -> String {
+    let lower = day.trim().to_ascii_lowercase();
+    WEEKDAYS
+        .iter()
+        .position(|name| lower.starts_with(name))
+        .map_or(lower, |index| WEEKDAYS[(index + 6) % 7].to_string())
 }
 
 /// A schedule definition for a queue.
@@ -65,6 +66,22 @@ impl QueueSchedule {
         })
     }
 
+    /// Returns whether `time` ("HH:MM") on `day` lies inside the schedule's window.
+    /// A window that ends before it starts runs past midnight into the next day;
+    /// without a stop time the window lasts until the end of the start day.
+    pub fn is_active_at(&self, day: &str, time: &str) -> bool {
+        let time = time.trim();
+        let start = self.start_time.trim();
+        match self.stop_time.as_deref().map(str::trim) {
+            None => self.matches_day(day) && time >= start,
+            Some(stop) if start <= stop => self.matches_day(day) && time >= start && time < stop,
+            Some(stop) => {
+                (self.matches_day(day) && time >= start)
+                    || (self.matches_day(&previous_day(day)) && time < stop)
+            }
+        }
+    }
+
     /// Checks if current time matches start time on an active day.
     pub fn should_start(&self, day: &str, time: &str) -> bool {
         self.matches_day(day) && self.start_time.trim() == time.trim()
@@ -72,10 +89,16 @@ impl QueueSchedule {
 
     /// Checks if current time matches stop time on an active day.
     pub fn should_stop(&self, day: &str, time: &str) -> bool {
-        if let Some(stop) = &self.stop_time {
-            self.matches_day(day) && stop.trim() == time.trim()
+        let Some(stop) = &self.stop_time else {
+            return false;
+        };
+        // A window that runs past midnight stops on the day after it started.
+        let wraps = stop.trim() < self.start_time.trim();
+        let start_day_matches = if wraps {
+            self.matches_day(&previous_day(day))
         } else {
-            false
-        }
+            self.matches_day(day)
+        };
+        start_day_matches && stop.trim() == time.trim()
     }
 }

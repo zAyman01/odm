@@ -524,3 +524,164 @@ mod queue_order {
         assert_eq!(started, vec![ids[1], ids[2], ids[0]]);
     }
 }
+
+mod schedule_windows {
+    use super::{MockClock, sample_job};
+    use odm_core::schedule::QueueSchedule;
+    use odm_core::{Engine, JobState, Store};
+    use odm_daemon::config::DaemonConfig;
+    use odm_daemon::scheduler::Scheduler;
+    use odm_daemon::state::AppState;
+    use std::sync::Arc;
+    use tempfile::tempdir;
+
+    fn night_schedule() -> QueueSchedule {
+        QueueSchedule::new("22:00", Some("04:00".to_string()), vec!["mon".to_string()])
+    }
+
+    #[test]
+    fn window_covers_the_night_that_starts_on_a_listed_day() {
+        let schedule = night_schedule();
+
+        assert!(schedule.is_active_at("mon", "22:00"));
+        assert!(schedule.is_active_at("mon", "23:59"));
+        assert!(schedule.is_active_at("tue", "03:59"));
+        assert!(!schedule.is_active_at("tue", "04:00"));
+        assert!(!schedule.is_active_at("mon", "12:00"));
+        assert!(!schedule.is_active_at("tue", "23:00"));
+        assert!(!schedule.is_active_at("mon", "03:00"));
+
+        // The stop of a night that starts on Monday falls on Tuesday morning.
+        assert!(schedule.should_stop("tue", "04:00"));
+        assert!(!schedule.should_stop("mon", "04:00"));
+    }
+
+    #[test]
+    fn same_day_window_and_open_ended_schedule() {
+        let day = QueueSchedule::new("08:00", Some("17:00".to_string()), vec![]);
+        assert!(day.is_active_at("wed", "08:00"));
+        assert!(day.is_active_at("wed", "16:59"));
+        assert!(!day.is_active_at("wed", "17:00"));
+        assert!(!day.is_active_at("wed", "07:59"));
+
+        let open = QueueSchedule::new("08:00", None, vec!["fri".to_string()]);
+        assert!(open.is_active_at("fri", "23:30"));
+        assert!(!open.is_active_at("fri", "07:00"));
+        assert!(!open.is_active_at("sat", "09:00"));
+    }
+
+    fn state_with_queue(dir: &std::path::Path, clock: &Arc<MockClock>) -> (AppState, i64) {
+        let store = Store::open_in_memory().unwrap();
+        let queue = store
+            .create_queue_with_schedule("nightly", 1, Some(&night_schedule()))
+            .unwrap();
+        let engine = Engine::new(store).unwrap();
+        let state =
+            AppState::new(engine, DaemonConfig::for_test(dir, "secret")).with_clock(clock.clone());
+        (state, queue.id)
+    }
+
+    #[tokio::test]
+    async fn job_added_outside_window_stays_queued() {
+        let dir = tempdir().unwrap();
+        let clock = Arc::new(MockClock::new("mon", "12:00"));
+        let (state, queue_id) = state_with_queue(dir.path(), &clock);
+        let mut job = sample_job(dir.path());
+        job.set_queue_id(queue_id);
+        state.engine.store().insert_job(&mut job).unwrap();
+
+        state.spawn_download(job.id(), "nightly", 1);
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        assert_eq!(
+            state.engine.store().get_job(job.id()).unwrap().state(),
+            JobState::Queued
+        );
+    }
+
+    #[tokio::test]
+    async fn job_added_inside_window_starts() {
+        let dir = tempdir().unwrap();
+        let clock = Arc::new(MockClock::new("mon", "23:00"));
+        let (state, queue_id) = state_with_queue(dir.path(), &clock);
+        let mut job = sample_job(dir.path());
+        job.set_queue_id(queue_id);
+        state.engine.store().insert_job(&mut job).unwrap();
+
+        state.spawn_download(job.id(), "nightly", 1);
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        assert_ne!(
+            state.engine.store().get_job(job.id()).unwrap().state(),
+            JobState::Queued
+        );
+    }
+
+    #[tokio::test]
+    async fn at_stop_time_waiting_jobs_do_not_start_when_running_ones_pause() {
+        let dir = tempdir().unwrap();
+        let clock = Arc::new(MockClock::new("mon", "23:00"));
+        let (state, queue_id) = state_with_queue(dir.path(), &clock);
+        let mut waiting = sample_job(dir.path());
+        waiting.set_queue_id(queue_id);
+        state.engine.store().insert_job(&mut waiting).unwrap();
+
+        // The only slot is busy, as if a running job held it.
+        let busy = state
+            .get_semaphore("nightly", 1)
+            .acquire_owned()
+            .await
+            .unwrap();
+        state.spawn_download(waiting.id(), "nightly", 1);
+        clock.set("tue", "04:00");
+        drop(busy);
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        assert_eq!(
+            state.engine.store().get_job(waiting.id()).unwrap().state(),
+            JobState::Queued
+        );
+    }
+
+    #[tokio::test]
+    async fn scheduler_resumes_only_the_jobs_it_paused() {
+        let dir = tempdir().unwrap();
+        let store = Store::open_in_memory().unwrap();
+        let queue = store
+            .create_queue_with_schedule("nightly", 2, Some(&night_schedule()))
+            .unwrap();
+        let mut by_schedule = sample_job(dir.path());
+        let mut by_user = sample_job(dir.path());
+        for job in [&mut by_schedule, &mut by_user] {
+            job.set_queue_id(queue.id);
+            store.insert_job(job).unwrap();
+        }
+        let engine = Engine::new(store).unwrap();
+        by_schedule.transition_to(JobState::Probing).unwrap();
+        by_schedule.transition_to(JobState::Downloading).unwrap();
+        engine.store().update_job(&by_schedule).unwrap();
+        by_user.transition_to(JobState::Paused).unwrap();
+        engine.store().update_job(&by_user).unwrap();
+
+        let clock = Arc::new(MockClock::new("tue", "04:00"));
+        let scheduler = Scheduler::new_with_clock(engine.clone(), clock.clone());
+        scheduler.tick().await;
+        assert_eq!(
+            engine.store().get_job(by_schedule.id()).unwrap().state(),
+            JobState::Paused
+        );
+
+        clock.set("mon", "22:00");
+        scheduler.tick().await;
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+        assert_ne!(
+            engine.store().get_job(by_schedule.id()).unwrap().state(),
+            JobState::Paused
+        );
+        assert_eq!(
+            engine.store().get_job(by_user.id()).unwrap().state(),
+            JobState::Paused
+        );
+    }
+}

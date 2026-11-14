@@ -115,3 +115,24 @@ async fn run_queue_respects_the_concurrency_limit() {
     }
     assert!(server.max_active.load(Ordering::SeqCst) <= 2);
 }
+
+#[test]
+fn system_clock_weekday_and_time_use_local_zone() {
+    use chrono::Datelike;
+    use odm_core::schedule::{Clock, SystemClock};
+
+    let local = |now: chrono::DateTime<chrono::Local>| {
+        let day = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+            [now.weekday().num_days_from_monday() as usize];
+        (day.to_string(), now.format("%H:%M").to_string())
+    };
+
+    let before = local(chrono::Local::now());
+    let reading = SystemClock.now();
+    let after = local(chrono::Local::now());
+
+    assert!(
+        reading == before || reading == after,
+        "{reading:?} is not the local time ({before:?}..{after:?})"
+    );
+}

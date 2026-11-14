@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 async-trait = "0.1.92"
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 md-5 = "0.10.6"
 percent-encoding = "2.3.2"
 quick-xml = "0.41.0"

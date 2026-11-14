@@ -2,15 +2,18 @@
 
 use odm_core::engine::EngineError;
 use odm_core::schedule::{Clock, SystemClock};
-use odm_core::{Engine, JobState};
-use std::sync::Arc;
+use odm_core::{Engine, JobId, JobState};
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// Background queue scheduler evaluating start and stop times.
 pub struct Scheduler {
     engine: Engine,
     clock: Arc<dyn Clock>,
     running: Arc<AtomicBool>,
+    /// Jobs this scheduler paused at a stop time; only these resume at the next start.
+    paused_by_schedule: Mutex<HashSet<JobId>>,
 }
 
 impl Scheduler {
@@ -25,6 +28,7 @@ impl Scheduler {
             engine,
             clock,
             running: Arc::new(AtomicBool::new(false)),
+            paused_by_schedule: Mutex::new(HashSet::new()),
         }
     }
 
@@ -51,6 +55,7 @@ impl Scheduler {
                     day = %day,
                     "Starting queue on schedule"
                 );
+                self.requeue_jobs_paused_by_schedule(queue.id);
                 let engine = self.engine.clone();
                 let queue_name = queue.name.clone();
                 tokio::spawn(async move {
@@ -72,15 +77,46 @@ impl Scheduler {
                         if matches!(
                             job.state(),
                             JobState::Downloading | JobState::Probing | JobState::Verifying
-                        ) && let Err(EngineError::NotRunning(_)) = self.engine.pause(job.id())
-                        {
-                            let mut updated = job.clone();
-                            if updated.transition_to(JobState::Paused).is_ok() {
-                                let _ = self.engine.store().update_job(&updated);
+                        ) {
+                            let paused = match self.engine.pause(job.id()) {
+                                Ok(()) => true,
+                                Err(EngineError::NotRunning(_)) => {
+                                    let mut updated = job.clone();
+                                    updated.transition_to(JobState::Paused).is_ok()
+                                        && self.engine.store().update_job(&updated).is_ok()
+                                }
+                                Err(_) => false,
+                            };
+                            if paused {
+                                self.paused_by_schedule
+                                    .lock()
+                                    .unwrap_or_else(|p| p.into_inner())
+                                    .insert(job.id());
                             }
                         }
                     }
                 }
+            }
+        }
+    }
+
+    /// Puts the jobs this scheduler paused in the queue back to `Queued`, so the
+    /// queue run picks them up. Jobs the user paused or resumed are left alone.
+    fn requeue_jobs_paused_by_schedule(&self, queue_id: i64) {
+        let Ok(jobs) = self.engine.store().queue_jobs(queue_id) else {
+            return;
+        };
+        let mut paused = self
+            .paused_by_schedule
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        for job in jobs {
+            if !paused.remove(&job.id()) || job.state() != JobState::Paused {
+                continue;
+            }
+            let mut queued = job;
+            if queued.transition_to(JobState::Queued).is_ok() {
+                let _ = self.engine.store().update_job(&queued);
             }
         }
     }

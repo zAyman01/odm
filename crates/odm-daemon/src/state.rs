@@ -23,6 +23,7 @@ pub struct AppState {
     pub ytdlp: Option<Arc<YtDlpBackend>>,
     pub plugins: Arc<RwLock<PluginRegistry>>,
     pub allowed_hosts: crate::auth::AllowedHosts,
+    clock: Arc<dyn odm_core::schedule::Clock>,
     pub http_client: Client,
     semaphores: Arc<Mutex<HashMap<String, QueueSlots>>>,
     /// Jobs a worker has already taken, so two workers never start the same job.
@@ -59,6 +60,7 @@ impl AppState {
             ytdlp: None,
             plugins,
             allowed_hosts: Arc::default(),
+            clock: Arc::new(odm_core::schedule::SystemClock),
             http_client,
             semaphores: Arc::new(Mutex::new(HashMap::new())),
             claimed: Arc::default(),
@@ -70,6 +72,12 @@ impl AppState {
 
     pub fn with_http_client(mut self, client: Client) -> Self {
         self.http_client = client;
+        self
+    }
+
+    /// Replaces the clock that decides whether a scheduled queue is open (for tests).
+    pub fn with_clock(mut self, clock: Arc<dyn odm_core::schedule::Clock>) -> Self {
+        self.clock = clock;
         self
     }
 
@@ -191,7 +199,11 @@ impl AppState {
         tokio::spawn(async move {
             let permit = sem.acquire().await;
             let next = if waits_as_queued {
-                state.claim_next_queued(&queue_name)
+                // A scheduled queue only starts waiting jobs inside its window.
+                state
+                    .queue_is_open(&queue_name)
+                    .then(|| state.claim_next_queued(&queue_name))
+                    .flatten()
             } else {
                 state.claim(id).then_some(id)
             };
@@ -200,6 +212,20 @@ impl AppState {
                 state.release(next);
             }
         });
+    }
+
+    /// Returns whether the queue has no schedule or its window is open now.
+    fn queue_is_open(&self, queue_name: &str) -> bool {
+        let schedule = self
+            .engine
+            .store()
+            .queue_by_name(queue_name)
+            .ok()
+            .and_then(|queue| queue.schedule);
+        schedule.is_none_or(|schedule| {
+            let (day, time) = self.clock.now();
+            schedule.is_active_at(&day, &time)
+        })
     }
 
     fn is_queued(&self, id: JobId) -> bool {
