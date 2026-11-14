@@ -1,7 +1,8 @@
 //! Message types exchanged between the UI thread and the background bridge.
 use odm_api::{
     AddDownloadRequest, CategoryDto, DownloadDetailDto, DownloadItemDto, Event, GrabberRequest,
-    GrabberResponse, PluginListResponse, ProbeResponse, QueueDto, UpdateSettingsRequest,
+    GrabberResponse, PluginListResponse, ProbeResponse, QueueDto, SettingsDto,
+    UpdateSettingsRequest,
 };
 
 /// Actions dispatched from the UI thread to the background daemon bridge.
@@ -13,6 +14,9 @@ pub enum UserAction {
     Pause(i64),
     Resume(i64),
     Cancel(i64),
+    Retry(i64),
+    /// Asks the daemon for a download's segments and options.
+    FetchDetail(i64),
     Remove {
         id: i64,
         delete_file: bool,
@@ -46,6 +50,7 @@ pub enum GuiEvent {
     CategoriesList(Vec<CategoryDto>),
     QueuesList(Vec<QueueDto>),
     DownloadDetail(Box<DownloadDetailDto>),
+    SettingsLoaded(Box<SettingsDto>),
     ProbeResult(Result<ProbeResponse, String>),
     GrabberResult(Result<GrabberResponse, String>),
     PluginsList(Result<PluginListResponse, String>),

@@ -2,7 +2,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use odm_api::{DownloadItemDto, Event, ProbeResponse};
-use odm_gui::messages::GuiEvent;
+use odm_gui::messages::{GuiEvent, UserAction};
 use odm_gui::state::{Filter, ThemeMode, ViewState};
 
 fn sample_item(id: i64, state: &str, queue: &str) -> DownloadItemDto {
@@ -141,4 +141,41 @@ fn active_filter_uses_real_states() {
     let ids: Vec<i64> = state.filtered_downloads().iter().map(|d| d.id).collect();
 
     assert_eq!(ids, vec![1, 2, 3]);
+}
+
+#[test]
+fn selected_job_requests_detail_once_per_interval() {
+    let mut state = ViewState::default();
+    let start = std::time::Instant::now();
+    assert_eq!(state.next_detail_request(start), None);
+
+    state.select_download(Some(7));
+    assert_eq!(state.next_detail_request(start), Some(7));
+    assert_eq!(state.next_detail_request(start), None);
+
+    let later = start + std::time::Duration::from_secs(3);
+    assert_eq!(state.next_detail_request(later), Some(7));
+
+    state.select_download(Some(8));
+    assert_eq!(state.next_detail_request(later), Some(8));
+}
+
+#[test]
+fn new_queue_form_builds_a_create_action_and_resets() {
+    let mut state = ViewState::default();
+    assert!(state.take_new_queue_action().is_none());
+
+    state.new_queue_name = "  music ".to_string();
+    state.new_queue_concurrency = 2;
+    let action = state.take_new_queue_action().unwrap();
+
+    match action {
+        UserAction::CreateQueue { name, concurrency } => {
+            assert_eq!(name, "music");
+            assert_eq!(concurrency, 2);
+        }
+        other => panic!("unexpected action: {other:?}"),
+    }
+    assert!(state.new_queue_name.is_empty());
+    assert!(state.take_new_queue_action().is_none());
 }

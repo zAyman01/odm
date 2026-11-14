@@ -32,6 +32,18 @@ pub fn render_toolbar(
                 let _ = action_tx.send(UserAction::Pause(id));
             }
 
+            if ui.button("✖ Cancel").clicked()
+                && let Some(id) = selected
+            {
+                let _ = action_tx.send(UserAction::Cancel(id));
+            }
+
+            if ui.button("↻ Retry").clicked()
+                && let Some(id) = selected
+            {
+                let _ = action_tx.send(UserAction::Retry(id));
+            }
+
             if ui.button("🗑 Remove").clicked()
                 && let Some(id) = selected
             {
@@ -43,6 +55,10 @@ pub fn render_toolbar(
         });
 
         ui.separator();
+
+        if ui.button("⟳ Refresh").clicked() {
+            let _ = action_tx.send(UserAction::Refresh);
+        }
 
         if ui.button("🌐 Grabber").clicked() {
             state.open_grabber_dialog();

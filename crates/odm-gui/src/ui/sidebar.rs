@@ -1,9 +1,15 @@
 //! Left navigation sidebar with category, status, and queue filters.
 
-use crate::state::{Filter, ViewState};
+use crate::messages::UserAction;
+use crate::state::{Filter, ViewState, is_active_state};
 use eframe::egui;
+use tokio::sync::mpsc;
 
-pub fn render_sidebar(ui: &mut egui::Ui, state: &mut ViewState) {
+pub fn render_sidebar(
+    ui: &mut egui::Ui,
+    state: &mut ViewState,
+    action_tx: &mpsc::UnboundedSender<UserAction>,
+) {
     ui.vertical(|ui| {
         ui.heading("Downloads");
         ui.add_space(4.0);
@@ -12,7 +18,7 @@ pub fn render_sidebar(ui: &mut egui::Ui, state: &mut ViewState) {
         let active_count = state
             .downloads
             .iter()
-            .filter(|d| matches!(d.state.as_str(), "downloading" | "pending" | "probed"))
+            .filter(|d| is_active_state(&d.state))
             .count();
         let completed_count = state
             .downloads
@@ -86,6 +92,20 @@ pub fn render_sidebar(ui: &mut egui::Ui, state: &mut ViewState) {
                 state.filter = q_filter;
             }
         }
+
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut state.new_queue_name)
+                    .hint_text("New queue")
+                    .desired_width(80.0),
+            );
+            ui.add(egui::DragValue::new(&mut state.new_queue_concurrency).range(1..=16));
+            if ui.button("Add").clicked()
+                && let Some(action) = state.take_new_queue_action()
+            {
+                let _ = action_tx.send(action);
+            }
+        });
 
         ui.separator();
         ui.label(egui::RichText::new("Categories").strong());

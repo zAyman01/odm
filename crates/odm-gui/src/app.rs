@@ -14,7 +14,7 @@ use crate::ui::toolbar::render_toolbar;
 use eframe::egui;
 use odm_api::Event;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 pub struct OdmGuiApp {
@@ -73,6 +73,11 @@ impl eframe::App for OdmGuiApp {
             ctx.request_repaint();
         }
 
+        // The detail panel needs the segments of the selected job
+        if let Some(id) = self.state.next_detail_request(Instant::now()) {
+            let _ = self.action_tx.send(UserAction::FetchDetail(id));
+        }
+
         // Apply visual theme
         match self.state.theme {
             ThemeMode::Dark | ThemeMode::System => ctx.set_visuals(egui::Visuals::dark()),
@@ -99,7 +104,7 @@ impl eframe::App for OdmGuiApp {
             .resizable(true)
             .default_width(180.0)
             .show(ctx, |ui| {
-                render_sidebar(ui, &mut self.state);
+                render_sidebar(ui, &mut self.state, &self.action_tx);
             });
 
         // 4. Central Panel: Downloads table
@@ -117,6 +122,11 @@ impl eframe::App for OdmGuiApp {
         );
         render_grabber_dialog(ctx, &mut self.state, &self.action_tx);
         render_plugins_dialog(ctx, &mut self.state, &self.action_tx);
+
+        // Wake up again to refresh the segments of the selected job
+        if self.state.selected_id.is_some() {
+            ctx.request_repaint_after(Duration::from_secs(2));
+        }
 
         // Keep UI smoothly animating while active downloads are running
         if self

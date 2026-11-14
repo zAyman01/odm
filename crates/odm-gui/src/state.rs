@@ -4,7 +4,17 @@ use odm_api::{
     ProbeResponse, QualityDto, TorrentFileDto, UpdateSettingsRequest,
 };
 
-use crate::messages::GuiEvent;
+use std::time::{Duration, Instant};
+
+use crate::messages::{GuiEvent, UserAction};
+
+/// How often the detail panel asks the daemon for fresh segments.
+const DETAIL_REFRESH: Duration = Duration::from_secs(2);
+
+/// States that count as "active" in the sidebar and its filter.
+pub fn is_active_state(state: &str) -> bool {
+    matches!(state, "downloading" | "probing" | "verifying" | "seeding")
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Filter {
@@ -279,6 +289,11 @@ pub struct ViewState {
     pub theme: ThemeMode,
     pub status_message: Option<String>,
     pub error_message: Option<String>,
+    /// Name typed into the sidebar's "new queue" form.
+    pub new_queue_name: String,
+    pub new_queue_concurrency: u32,
+    /// The job whose detail was last requested, and when.
+    pub detail_requested: Option<(i64, Instant)>,
 }
 
 impl Default for ViewState {
@@ -299,6 +314,9 @@ impl Default for ViewState {
             theme: ThemeMode::Dark,
             status_message: None,
             error_message: None,
+            new_queue_name: String::new(),
+            new_queue_concurrency: 3,
+            detail_requested: None,
         }
     }
 }
@@ -308,7 +326,38 @@ impl ViewState {
         self.selected_id = id;
         if id.is_none() {
             self.selected_detail = None;
+            self.detail_requested = None;
         }
+    }
+
+    /// The job whose detail the daemon should be asked for now: the selected one,
+    /// when it is new or its detail is older than `DETAIL_REFRESH`.
+    pub fn next_detail_request(&mut self, now: Instant) -> Option<i64> {
+        let id = self.selected_id?;
+        let due = match self.detail_requested {
+            Some((requested, at)) if requested == id => {
+                now.saturating_duration_since(at) >= DETAIL_REFRESH
+            }
+            _ => true,
+        };
+        if !due {
+            return None;
+        }
+        self.detail_requested = Some((id, now));
+        Some(id)
+    }
+
+    /// Turns the "new queue" form into an action and clears the name.
+    pub fn take_new_queue_action(&mut self) -> Option<UserAction> {
+        let name = self.new_queue_name.trim().to_string();
+        if name.is_empty() {
+            return None;
+        }
+        self.new_queue_name.clear();
+        Some(UserAction::CreateQueue {
+            name,
+            concurrency: self.new_queue_concurrency.max(1),
+        })
     }
 
     pub fn open_add_dialog(&mut self, prefill_url: Option<String>) {
@@ -554,10 +603,7 @@ impl ViewState {
             .iter()
             .filter(|item| match self.filter {
                 Filter::All => true,
-                Filter::Active => matches!(
-                    item.state.as_str(),
-                    "downloading" | "probing" | "verifying" | "seeding"
-                ),
+                Filter::Active => is_active_state(&item.state),
                 Filter::Completed => item.state == "completed",
                 Filter::Torrents => item.backend.as_deref() == Some("torrent"),
                 Filter::Queue(ref q) => &item.queue == q,
@@ -579,6 +625,9 @@ impl ViewState {
                     self.selected_id = None;
                     self.selected_detail = None;
                 }
+            }
+            GuiEvent::SettingsLoaded(settings) => {
+                self.settings_dialog.load_settings(&settings);
             }
             GuiEvent::DownloadDetail(detail) => {
                 if self.selected_id == Some(detail.item.id) {

@@ -5,9 +5,10 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use odm_api::{
-    CreateQueueRequest, ErrorResponse, Event, GrabberResponse, ListCategoriesResponse,
-    ListDownloadsResponse, ListQueuesResponse, PluginListResponse, ProbeRequest, ProbeResponse,
-    SetCategoryRequest, UpdateQueueRequest, WsAuthRequest, WsAuthResponse,
+    CreateQueueRequest, DownloadDetailDto, ErrorResponse, Event, GrabberResponse,
+    ListCategoriesResponse, ListDownloadsResponse, ListQueuesResponse, PluginListResponse,
+    ProbeRequest, ProbeResponse, SetCategoryRequest, SettingsDto, UpdateQueueRequest,
+    WsAuthRequest, WsAuthResponse,
 };
 use reqwest::header::AUTHORIZATION;
 use reqwest::{Client, Method, RequestBuilder};
@@ -128,9 +129,11 @@ pub async fn run_bridge(
     }
     daemon.emit(GuiEvent::DaemonStatus(connected));
 
-    // 2. Initial fetch of downloads, categories, queues
+    // 2. Initial fetch of downloads, categories, queues and settings. Settings are
+    //    not part of every refresh: a reload would overwrite what the user is typing.
     if connected {
         daemon.refresh_all().await;
+        daemon.fetch_settings().await;
     }
 
     // 3. WebSocket subscriber. Events sent while it was down are gone, so each
@@ -231,6 +234,27 @@ impl Daemon {
         }
     }
 
+    async fn fetch_settings(&self) {
+        if let Some(settings) = self.get_json::<SettingsDto>("/settings").await {
+            self.emit(GuiEvent::SettingsLoaded(Box::new(settings)));
+        }
+    }
+
+    async fn fetch_detail(&self, id: i64) {
+        if let Some(detail) = self
+            .get_json::<DownloadDetailDto>(&format!("/downloads/{id}"))
+            .await
+        {
+            self.emit(GuiEvent::DownloadDetail(Box::new(detail)));
+        }
+    }
+
+    /// Posts a job command such as `pause`; a refusal reaches the UI.
+    async fn job_command(&self, id: i64, command: &str) {
+        let request = self.request(Method::POST, &format!("/downloads/{id}/{command}"));
+        self.call_and_report(request).await;
+    }
+
     async fn refresh_all(&self) {
         self.fetch_downloads().await;
         self.fetch_categories().await;
@@ -298,30 +322,16 @@ impl Daemon {
                 // Handled in local GUI state
             }
 
-            UserAction::Pause(id) => {
-                let _ = self
-                    .request(Method::POST, &format!("/downloads/{id}/pause"))
-                    .send()
-                    .await;
-            }
-
-            UserAction::Resume(id) => {
-                let _ = self
-                    .request(Method::POST, &format!("/downloads/{id}/resume"))
-                    .send()
-                    .await;
-            }
-
-            UserAction::Cancel(id) => {
-                let _ = self
-                    .request(Method::POST, &format!("/downloads/{id}/cancel"))
-                    .send()
-                    .await;
-            }
+            UserAction::Pause(id) => self.job_command(id, "pause").await,
+            UserAction::Resume(id) => self.job_command(id, "resume").await,
+            UserAction::Cancel(id) => self.job_command(id, "cancel").await,
+            UserAction::Retry(id) => self.job_command(id, "retry").await,
+            UserAction::FetchDetail(id) => self.fetch_detail(id).await,
 
             UserAction::Remove { id, delete_file } => {
                 let path = format!("/downloads/{id}?delete_file={delete_file}");
-                let _ = self.request(Method::DELETE, &path).send().await;
+                self.call_and_report(self.request(Method::DELETE, &path))
+                    .await;
             }
 
             UserAction::UpdateSettings(settings) => {
@@ -340,11 +350,10 @@ impl Daemon {
                     schedule_stop: None,
                     schedule_days: None,
                 };
-                let _ = self
-                    .request(Method::POST, "/queues")
-                    .json(&body)
-                    .send()
-                    .await;
+                let request = self.request(Method::POST, "/queues").json(&body);
+                if self.call_and_report(request).await {
+                    self.fetch_queues().await;
+                }
             }
 
             UserAction::SetCategory {
