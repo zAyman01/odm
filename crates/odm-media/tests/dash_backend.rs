@@ -45,7 +45,7 @@ fn make_fake_ffmpeg(dir: &std::path::Path) -> PathBuf {
 fn make_fake_ffmpeg(dir: &std::path::Path) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let script_path = dir.join("fake_ffmpeg.sh");
-    let script = "#!/bin/sh\n\
+    let script = "#!/bin/bash\n\
                   out=\"${@: -1}\"\n\
                   if [ -n \"$5\" ] && [ \"$5\" != \"-c\" ]; then\n\
                       cat \"$3\" \"$5\" > \"$out\"\n\
