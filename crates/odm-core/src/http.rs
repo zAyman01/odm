@@ -70,7 +70,8 @@ impl From<&SegmentWork> for Segment {
 
 /// Returns how many segments to use for `size` bytes when `requested` were asked for.
 fn segment_count(requested: u32, size: u64) -> u32 {
-    let most_useful = u32::try_from(size).unwrap_or(u32::MAX);
+    // A segment smaller than this costs more in connections than it saves in time.
+    let most_useful = u32::try_from(size / MIN_SEGMENT_BYTES).unwrap_or(u32::MAX);
     requested.clamp(1, MAX_SEGMENTS).min(most_useful).max(1)
 }
 
@@ -866,22 +867,35 @@ impl Backend for HttpBackend {
             .send()
             .await?;
 
-        if head.status().is_success()
-            && let Some(total) = content_length(head.headers())
+        let head_probe = if head.status().is_success() {
+            content_length(head.headers()).map(|total| {
+                probe_from(
+                    head.headers(),
+                    &url,
+                    Some(total),
+                    accepts_ranges(head.headers()),
+                )
+            })
+        } else {
+            None
+        };
+        if let Some(probe) = &head_probe
+            && probe.supports_ranges
         {
-            return Ok(probe_from(
-                head.headers(),
-                &url,
-                Some(total),
-                accepts_ranges(head.headers()),
-            ));
+            return Ok(probe.clone());
         }
 
-        let response = self
+        // HEAD failed, or did not say whether ranges work: ask for the first byte.
+        // What HEAD did report still beats failing when the ranged GET is refused.
+        let response = match self
             .request(Method::GET, url.clone(), opts)?
             .header(RANGE, "bytes=0-0")
             .send()
-            .await?;
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => return head_probe.ok_or(error.into()),
+        };
 
         let status = response.status();
         let (total, supports_ranges) = if status == StatusCode::PARTIAL_CONTENT {
@@ -892,7 +906,7 @@ impl Backend for HttpBackend {
                 accepts_ranges(response.headers()),
             )
         } else {
-            return Err(BackendError::Status(status));
+            return head_probe.ok_or(BackendError::Status(status));
         };
 
         Ok(probe_from(response.headers(), &url, total, supports_ranges))

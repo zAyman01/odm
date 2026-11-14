@@ -248,7 +248,8 @@ fn context(job: &Job, store: &Store, control: ControlToken, progress: ProgressSi
 
 #[tokio::test]
 async fn segmented_download_writes_ranges_and_whole_file() {
-    let payload = payload(BLOCK * 8);
+    // Four segments of at least MIN_SEGMENT_BYTES each.
+    let payload = payload(BLOCK * 64);
     let server = TestServer::start(payload.as_ref().clone(), true, false).await;
     let store = Store::open_in_memory().unwrap();
     let dir = TempDir::new().unwrap();
@@ -627,4 +628,28 @@ async fn missing_part_file_resets_segments() {
         std::fs::read(job.target_path()).unwrap().as_slice(),
         data.as_slice()
     );
+}
+
+#[tokio::test]
+async fn small_file_uses_one_connection() {
+    let payload = payload(100 * 1024);
+    let server = TestServer::start(payload.as_ref().clone(), true, false).await;
+    let store = Store::open_in_memory().unwrap();
+    let dir = TempDir::new().unwrap();
+    let job = ready_job(&server, &store, dir.path(), Some(8));
+
+    let (_handle, control) = ControlToken::new();
+    let (progress, _updates) = ProgressSink::new();
+    let outcome = HttpBackend::new()
+        .unwrap()
+        .run(context(&job, &store, control, progress))
+        .await
+        .unwrap();
+
+    assert_eq!(outcome, RunOutcome::Completed);
+    assert_eq!(
+        std::fs::read(job.target_path()).unwrap().as_slice(),
+        payload.as_slice()
+    );
+    assert_eq!(server.state.ranges.lock().unwrap().len(), 1);
 }

@@ -35,6 +35,7 @@ impl TestServer {
             .route("/named.bin", get(named))
             .route("/head-405.bin", any(no_head))
             .route("/range-405.bin", any(range))
+            .route("/head-no-ranges.bin", any(head_without_ranges))
             .with_state(Arc::new(PAYLOAD.to_vec()));
         let handle = tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
@@ -101,6 +102,18 @@ async fn range(
             .into_response();
     }
     response(&payload, None, None)
+}
+
+/// HEAD reports the size but not `Accept-Ranges`, yet a ranged GET works.
+async fn head_without_ranges(
+    method: Method,
+    headers: HeaderMap,
+    State(payload): State<Arc<Vec<u8>>>,
+) -> Response {
+    if method == Method::HEAD {
+        return response(&payload, None, None);
+    }
+    range(method, headers, State(payload)).await
 }
 
 fn response(payload: &[u8], disposition: Option<&str>, etag: Option<&str>) -> Response {
@@ -390,4 +403,21 @@ async fn stalled_server_times_out() {
     .expect("a stalled server must not hang the job");
 
     assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn range_probe_falls_back_to_get_range_0_0() {
+    let server = TestServer::start().await;
+    let backend = HttpBackend::new().unwrap();
+
+    let probe = backend
+        .probe(
+            &Source::Url(server.url("/head-no-ranges.bin")),
+            &JobOptions::default(),
+        )
+        .await
+        .unwrap();
+
+    assert!(probe.supports_ranges);
+    assert_eq!(probe.total_bytes, Some(PAYLOAD.len() as u64));
 }
