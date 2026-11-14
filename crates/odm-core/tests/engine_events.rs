@@ -112,7 +112,7 @@ async fn engine_emits_added_state_and_removed_events() {
     assert!(states.contains(&JobState::Completed));
 
     // Remove job and file
-    engine.remove(id, true).unwrap();
+    engine.remove(id, true).await.unwrap();
     let removed_event = rx.recv().await.unwrap();
     assert_eq!(removed_event, Event::JobRemoved(id));
 }

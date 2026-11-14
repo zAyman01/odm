@@ -18,6 +18,11 @@ use crate::job::{BackendKind, Job, JobId, JobOptions, JobState, Source, Transiti
 use crate::limiter::{Limiter, TokenBucket};
 use crate::store::{Store, StoreError};
 
+/// How long `remove` waits for a running job to stop.
+const STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+/// How often a running job's byte count is written to the store.
+const PROGRESS_SAVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
 struct ControlGuard {
     id: JobId,
     controls: Arc<Mutex<HashMap<JobId, ControlHandle>>>,
@@ -176,8 +181,10 @@ impl Engine {
     }
 
     /// Removes a job from the store, cancels it if running, and optionally deletes the file.
-    pub fn remove(&self, id: JobId, delete_file: bool) -> Result<(), EngineError> {
+    /// A running job is given time to stop first, so it cannot write the file again.
+    pub async fn remove(&self, id: JobId, delete_file: bool) -> Result<(), EngineError> {
         let _ = self.cancel(id);
+        self.wait_until_idle(id).await;
         let job = self.store.get_job(id)?;
         self.store.delete_job(id)?;
         if delete_file {
@@ -212,7 +219,29 @@ impl Engine {
         Ok(())
     }
 
-    /// Cancels a running or queued job.
+    /// Waits until no run of the job is active, for at most `STOP_TIMEOUT`.
+    async fn wait_until_idle(&self, id: JobId) {
+        let idle = async {
+            while self
+                .controls
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .contains_key(&id)
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        };
+        let _ = tokio::time::timeout(STOP_TIMEOUT, idle).await;
+    }
+
+    /// Deletes the partial file and saved segments of a job that will not resume.
+    fn discard_partial(&self, job: &Job) {
+        let _ = std::fs::remove_file(job.part_path());
+        let _ = self.store.clear_segments(job.id());
+    }
+
+    /// Cancels a running or queued job. A running job finishes cancelling in the
+    /// background; a job that is not running is cancelled and cleaned up here.
     pub fn cancel(&self, id: JobId) -> Result<(), EngineError> {
         let handle = {
             let map = self.controls.lock().unwrap_or_else(|p| p.into_inner());
@@ -229,6 +258,7 @@ impl Engine {
             }
             job.transition_to(JobState::Cancelled)?;
             self.store.update_job(&job)?;
+            self.discard_partial(&job);
             Ok(())
         }
     }
@@ -247,6 +277,20 @@ impl Engine {
 
     /// Probes, downloads and persists one job until it finishes or fails.
     pub async fn run(&self, id: JobId) -> Result<Job, EngineError> {
+        // Claim the job first, so two runs can never work on it together.
+        let (control_handle, control) = ControlToken::new();
+        {
+            let mut map = self.controls.lock().unwrap_or_else(|p| p.into_inner());
+            if map.contains_key(&id) {
+                return Err(EngineError::AlreadyRunning(id));
+            }
+            map.insert(id, control_handle);
+        }
+        let _guard = ControlGuard {
+            id,
+            controls: self.controls.clone(),
+        };
+
         let mut job = self.store.get_job(id)?;
         if job.state() == JobState::Paused {
             job.transition_to(JobState::Queued)?;
@@ -260,16 +304,6 @@ impl Engine {
         if job.state() != JobState::Queued {
             return Err(EngineError::InvalidState(job.state()));
         }
-
-        let (control_handle, control) = ControlToken::new();
-        {
-            let mut map = self.controls.lock().unwrap_or_else(|p| p.into_inner());
-            map.insert(id, control_handle);
-        }
-        let _guard = ControlGuard {
-            id,
-            controls: self.controls.clone(),
-        };
 
         let has_segments = !self.store.list_segments(id)?.is_empty();
         if !has_segments {
@@ -358,11 +392,13 @@ impl Engine {
         };
 
         let events_tx = self.events.clone();
+        let progress_store = self.store.clone();
         let total_bytes = job.total_bytes();
         let initial_bytes = job.downloaded_bytes();
 
         let progress_task = tokio::spawn(async move {
             let mut last_emit = tokio::time::Instant::now();
+            let mut last_saved: Option<tokio::time::Instant> = None;
             let mut last_bytes = initial_bytes;
             let mut final_bytes = initial_bytes;
             while let Some(update) = updates.recv().await {
@@ -371,6 +407,13 @@ impl Engine {
                     let _ = events_tx.send(Event::JobStateChanged { id, state });
                 }
                 let now = tokio::time::Instant::now();
+                // Keep the stored count fresh, so a crash loses at most a second of it.
+                if last_saved
+                    .is_none_or(|saved| now.duration_since(saved) >= PROGRESS_SAVE_INTERVAL)
+                {
+                    let _ = progress_store.save_downloaded_bytes(id, final_bytes);
+                    last_saved = Some(now);
+                }
                 let elapsed = now.duration_since(last_emit);
                 if elapsed >= std::time::Duration::from_millis(250) {
                     let bytes_diff = final_bytes.saturating_sub(last_bytes);
@@ -445,6 +488,7 @@ impl Engine {
                 });
             }
             RunOutcome::Cancelled => {
+                self.discard_partial(&job);
                 job.transition_to(JobState::Cancelled)?;
                 self.store.update_job(&job)?;
                 let _ = self.events.send(Event::JobStateChanged {
@@ -526,6 +570,8 @@ pub enum EngineError {
     InvalidState(JobState),
     #[error("job {0:?} is not currently running")]
     NotRunning(JobId),
+    #[error("job {0:?} is already running")]
+    AlreadyRunning(JobId),
     #[error("no backend registered for {0:?}")]
     NoBackend(BackendKind),
 }

@@ -724,6 +724,7 @@ pub async fn delete_download_handler(
     state
         .engine
         .remove(JobId(id), query.delete_file)
+        .await
         .map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,

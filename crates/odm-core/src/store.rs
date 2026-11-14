@@ -215,6 +215,19 @@ impl Store {
         }
     }
 
+    /// Saves how many bytes a running job has downloaded, leaving its other fields alone.
+    pub fn save_downloaded_bytes(&self, id: JobId, bytes: u64) -> Result<(), StoreError> {
+        let connection = self.lock()?;
+        let changed = connection.execute(
+            "UPDATE jobs SET downloaded_bytes = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id.0, bytes as i64, now_millis()],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::JobNotFound(id));
+        }
+        Ok(())
+    }
+
     /// Persists every mutable field of an existing job except `backend_state`,
     /// which backends own and write only through `set_backend_state`.
     pub fn update_job(&self, job: &Job) -> Result<(), StoreError> {
