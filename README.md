@@ -47,7 +47,7 @@ Prebuilt release packages are available on the [GitHub Releases](https://github.
 ### Windows (`x86_64`)
 1. Download `odm-v0.1.0-x86_64-pc-windows-msvc.zip`.
 2. Extract the archive into a folder of your choice (e.g. `C:\Program Files\odm` or `C:\Users\<user>\AppData\Local\Programs\odm`).
-3. Start `odm-daemon.exe`, then double-click `odm-gui.exe` to launch the desktop application (or run `odm.exe` from PowerShell / Command Prompt).
+3. Follow [How to Run odm](#how-to-run-odm): start `odm-daemon.exe` first, then double-click `odm-gui.exe` (or run `odm.exe` from PowerShell / Command Prompt).
 
 > [!NOTE]
 > **Windows Defender SmartScreen Notice:**  
@@ -63,7 +63,7 @@ Prebuilt release packages are available on the [GitHub Releases](https://github.
    cd odm
    chmod +x odm odm-daemon odm-gui
    ```
-3. Start `./odm-daemon`, then run `./odm-gui` for the desktop client, or `./odm` for the CLI.
+3. Follow [How to Run odm](#how-to-run-odm): start `./odm-daemon` first, then `./odm-gui` or `./odm`.
 
 ### macOS (Apple Silicon `aarch64` & Intel `x86_64`)
 1. Download the archive for your architecture:
@@ -75,13 +75,61 @@ Prebuilt release packages are available on the [GitHub Releases](https://github.
    cd odm
    chmod +x odm odm-daemon odm-gui
    ```
-3. Start `./odm-daemon`, then run `./odm-gui` or `./odm`.
+3. Follow [How to Run odm](#how-to-run-odm): start `./odm-daemon` first, then `./odm-gui` or `./odm`.
 
 > [!NOTE]
 > **macOS Gatekeeper Notice:**  
 > The v0.1.0 release binaries are not notarized with an Apple Developer ID. If macOS displays:  
 > *"odm-gui cannot be opened because Apple cannot check it for malicious software"*,  
 > right-click (or Control-click) `odm-gui` in Finder, click **Open**, and confirm in the dialog prompt. Alternatively, approve the app in **System Settings > Privacy & Security**.
+
+---
+
+## How to Run odm
+
+odm has three programs. `odm-daemon` does the downloading; `odm-gui` and `odm` (the CLI) are clients that talk to it. **Always start the daemon first.**
+
+### 1. Start the daemon
+
+Run it from the folder where you extracted the release (or `target/release/` after a source build):
+
+```bash
+# Linux / macOS
+./odm-daemon
+
+# Windows (PowerShell)
+.\odm-daemon.exe
+```
+
+The daemon listens on `http://127.0.0.1:6820` and keeps running until you close it (Ctrl+C stops it cleanly and pauses active jobs). On the first run it creates the config folder and a token file (see [Using the Web UI](#2-using-the-web-ui) for the location). Useful options:
+
+| Option | Meaning |
+|---|---|
+| `--bind 127.0.0.1:7000` | Listen on another address or port |
+| `--config-dir <path>` | Keep the config and token in another folder |
+| `--data-dir <path>` | Keep the database and torrent files in another folder |
+
+### 2. Start a client
+
+With the daemon running, use any of these:
+
+- **Desktop GUI:** run `./odm-gui` (`odm-gui.exe` on Windows). It finds the token on its own and shows "Daemon Connected" in the toolbar. "Daemon Offline" means the daemon is not running.
+- **CLI:** run `./odm add <url>`, then `./odm list`. See [Command-Line Client](#3-command-line-client-odm) below.
+- **Web UI:** open `http://127.0.0.1:6820/` in a browser and paste the token.
+- **Browser extension:** see [Browser Extension Setup](#browser-extension-setup).
+
+If you changed `--bind` or the config folder, tell the clients: set `ODM_SERVER` (for example `http://127.0.0.1:7000`) and `ODM_TOKEN` (the contents of the token file), or pass `--server` and `--token` to `odm`.
+
+### 3. Run from source instead
+
+```bash
+# Terminal 1: the daemon
+cargo run --release -p odm-daemon
+
+# Terminal 2: the GUI, or the CLI
+cargo run --release -p odm-gui
+cargo run --release -p odm-cli -- add https://example.com/file.zip
+```
 
 ---
 
