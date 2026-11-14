@@ -27,7 +27,7 @@ jobs:
             archive_type: tar.gz
             bin_ext: ""
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-15-intel
             archive_type: tar.gz
             bin_ext: ""
           - target: aarch64-apple-darwin
@@ -59,14 +59,16 @@ jobs:
           cp target/${{ matrix.target }}/release/odm-gui${{ matrix.bin_ext }} staging/
           cp README.md LICENSE-MIT LICENSE-APACHE staging/
 
-          ARCHIVE_NAME="odm-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive_type }}"
-          if [ "${{ matrix.archive_type }}" = "zip" ]; then
-            tar -a -cf "$ARCHIVE_NAME" -C staging .
-          else
-            tar -czf "$ARCHIVE_NAME" -C staging .
-          fi
           mkdir -p release-pkg
-          mv "$ARCHIVE_NAME" release-pkg/
+          ARCHIVE_NAME="odm-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive_type }}"
+          if [ "${{ matrix.archive_type }}" = "tar.gz" ]; then
+            tar -czf "release-pkg/$ARCHIVE_NAME" -C staging .
+          fi
+
+      - name: Package Windows archive
+        if: matrix.archive_type == 'zip'
+        shell: pwsh
+        run: Compress-Archive -Path staging/* -DestinationPath "release-pkg/odm-${{ github.ref_name }}-${{ matrix.target }}.zip"
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4

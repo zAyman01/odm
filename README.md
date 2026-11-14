@@ -9,13 +9,13 @@ A fast, cross-platform download manager written in Rust. It replaces Internet Do
 ## Features
 
 - **Segmented HTTP & HTTPS Acceleration:** Parallel connections (1–32 segments) with dynamic splitting of remaining parts, live speed throttling, automatic exponential-backoff retries, and crash-resilient resume using SQLite.
-- **BitTorrent Engine:** Native torrent client powered by `librqbit`. Downloads magnet links and `.torrent` files with multi-file selection, configurable seed ratios, DHT, peer exchange (PEX), and UPnP port mapping.
+- **BitTorrent Engine:** Native torrent client powered by `librqbit`. Downloads magnet links and `.torrent` files with multi-file selection, configurable seed ratios, DHT, and peer exchange (PEX). Torrent progress is not restored after a daemon restart, and UPnP port mapping is not supported.
 - **Streaming Media:** Native HLS (`.m3u8`) and DASH (`.mpd`) video extraction with audio/video muxing via `ffmpeg` and AES-128 decryption.
 - **yt-dlp Integration:** Direct format discovery and downloading from any site supported by `yt-dlp` with integrated progress reporting and rate limiting.
 - **Checksums & Mirrors:** Cryptographic verification (SHA-256, SHA-1, MD5), multi-mirror load distribution with automatic failover, and Metalink 3 / Meta4 XML parsing.
-- **Site Grabber:** Crawl web pages up to a configured depth to extract links and media matching extension or regex filters, with `robots.txt` compliance.
+- **Site Grabber:** Crawl web pages up to a configured depth to extract links and media matching extension or wildcard (`*`, `?`) filters, with `robots.txt` compliance.
 - **Plugin Architecture:** Out-of-process resolver plugins in any language using JSON over stdin/stdout with 30-second isolation and fault protection.
-- **Modern Desktop GUI:** Built with `egui`/`eframe` featuring dark/light modes, live segment visualizer, system tray integration, URL clipboard monitoring, and completion notifications.
+- **Modern Desktop GUI:** Built with `egui`/`eframe` featuring dark/light modes, a live segment visualizer, URL clipboard monitoring, and completion notifications. The GUI connects to a running daemon; it does not start one and has no system tray icon.
 - **Web UI & REST API:** Embedded single-page Web UI served directly by the daemon (`http://127.0.0.1:6820/`) with WebSocket live events and bearer authentication.
 - **Browser Extension:** Manifest V3 for Chromium (Chrome, Edge, Brave) and Firefox with automatic download capture, context menu integration ("Download with odm", "Download all links"), and live video stream sniffing.
 
@@ -34,7 +34,7 @@ A fast, cross-platform download manager written in Rust. It replaces Internet Do
 | `crates/odm-api` | Shared DTOs, request/response models, and WebSocket event types |
 | `crates/odm-daemon` | Headless background server with `axum` HTTP/WebSocket API and embedded Web UI |
 | `crates/odm-cli` | Command-line client (`odm`) with human-readable and `--json` modes |
-| `crates/odm-gui` | Desktop GUI (`odm-gui`) with system tray and egui interface |
+| `crates/odm-gui` | Desktop GUI (`odm-gui`) built with egui |
 | `extension/` | Browser extension for Chrome and Firefox (Manifest V3) |
 | `webui/` | Static Web UI embedded into `odm-daemon` |
 
@@ -47,7 +47,7 @@ Prebuilt release packages are available on the [GitHub Releases](https://github.
 ### Windows (`x86_64`)
 1. Download `odm-v0.1.0-x86_64-pc-windows-msvc.zip`.
 2. Extract the archive into a folder of your choice (e.g. `C:\Program Files\odm` or `C:\Users\<user>\AppData\Local\Programs\odm`).
-3. Double-click `odm-gui.exe` to launch the desktop application (or run `odm.exe` from PowerShell / Command Prompt).
+3. Start `odm-daemon.exe`, then double-click `odm-gui.exe` to launch the desktop application (or run `odm.exe` from PowerShell / Command Prompt).
 
 > [!NOTE]
 > **Windows Defender SmartScreen Notice:**  
@@ -59,11 +59,11 @@ Prebuilt release packages are available on the [GitHub Releases](https://github.
 1. Download `odm-v0.1.0-x86_64-unknown-linux-gnu.tar.gz`.
 2. Extract the archive:
    ```bash
-   tar -xzf odm-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
-   cd odm-v0.1.0-x86_64-unknown-linux-gnu
+   mkdir odm && tar -xzf odm-v0.1.0-x86_64-unknown-linux-gnu.tar.gz -C odm
+   cd odm
    chmod +x odm odm-daemon odm-gui
    ```
-3. Run `./odm-gui` for the desktop client, or `./odm` for the CLI.
+3. Start `./odm-daemon`, then run `./odm-gui` for the desktop client, or `./odm` for the CLI.
 
 ### macOS (Apple Silicon `aarch64` & Intel `x86_64`)
 1. Download the archive for your architecture:
@@ -71,9 +71,11 @@ Prebuilt release packages are available on the [GitHub Releases](https://github.
    - Intel: `odm-v0.1.0-x86_64-apple-darwin.tar.gz`
 2. Extract the archive:
    ```bash
-   tar -xzf odm-v0.1.0-*-apple-darwin.tar.gz
+   mkdir odm && tar -xzf odm-v0.1.0-*-apple-darwin.tar.gz -C odm
+   cd odm
    chmod +x odm odm-daemon odm-gui
    ```
+3. Start `./odm-daemon`, then run `./odm-gui` or `./odm`.
 
 > [!NOTE]
 > **macOS Gatekeeper Notice:**  
@@ -105,7 +107,7 @@ The browser extension integrates odm with Chrome, Firefox, Edge, Brave, and othe
 ## Getting Started
 
 ### 1. Launching the GUI
-Run `odm-gui`. The GUI automatically checks if `odm-daemon` is running; if not, it spawns the daemon in the background. Closing the window minimizes odm to the system tray.
+Start `odm-daemon` first, then run `odm-gui`. The GUI does not start the daemon; it connects to one on `http://127.0.0.1:6820` and shows "Daemon Offline" in the toolbar until the daemon is running. Closing the window exits the GUI; the daemon keeps running.
 
 ### 2. Using the Web UI
 The daemon embeds a lightweight, responsive Web UI:
@@ -125,10 +127,10 @@ The CLI provides full scriptable control over all features:
 odm add https://example.com/large-archive.zip
 
 # Add with options: 16 segments, 5 MB/s speed limit, SHA-256 integrity check
-odm add https://example.com/file.iso --segments 16 --limit 5242880 --hash sha256:e3b0c442...
+odm add https://example.com/file.iso --segments 16 --limit 5242880 --checksum sha256:e3b0c442...
 
 # Add multiple mirrors for failover
-odm add https://mirror1.com/file.zip --mirrors https://mirror2.com/file.zip,https://mirror3.com/file.zip
+odm add https://mirror1.com/file.zip --mirror https://mirror2.com/file.zip --mirror https://mirror3.com/file.zip
 
 # Add a BitTorrent magnet link with custom seed ratio
 odm add "magnet:?xt=urn:btih:..." --seed-ratio 1.5
@@ -140,9 +142,9 @@ odm add https://example.com/playlist.m3u8 --quality 1080p
 odm add "https://example.com/images/photo_[001-050].jpg"
 
 # Crawl a site up to depth 2 for images and archives
-odm grab https://example.com/gallery --depth 2 --ext zip,png,jpg --add
+odm grab https://example.com/gallery --depth 2 --ext "zip png jpg" --add
 
-# Inspect daemon state and active jobs
+# Check that the daemon is reachable, then inspect jobs
 odm daemon status
 odm list
 odm info <job-id>
@@ -158,15 +160,15 @@ odm list --json
 ## External Tools
 
 - **`ffmpeg`:** Required for muxing DASH video and audio tracks together into `.mp4`, and optional for converting HLS `.ts` streams into `.mp4`. Ensure `ffmpeg` is installed and on your system `PATH`, or set `ffmpeg_path` in odm settings.
-- **`yt-dlp`:** Required for downloading videos from sites supported by yt-dlp. odm looks for `yt-dlp` on your system `PATH` or in settings. The desktop GUI also offers a one-click download for `yt-dlp` on first use.
+- **`yt-dlp`:** Required for downloading videos from sites supported by yt-dlp. odm looks for `yt-dlp` on your system `PATH` or in settings. Install it yourself; odm does not download it.
 
 ---
 
 ## Security Model
 
-- **Authentication:** All daemon REST endpoints (except `GET /api/v1/health`) and WebSocket event streams require HTTP Bearer token authentication. A cryptographically random token is generated on initial run and stored with owner-only read permissions.
+- **Authentication:** All daemon REST endpoints (except `GET /api/v1/health`) and WebSocket event streams require HTTP Bearer token authentication. A 256-bit token is generated from the operating system's random source on the first run and stored with owner-only read permissions.
 - **DNS Rebinding Protection:** The daemon validates incoming `Host` headers against an allow-list (`127.0.0.1`, `localhost`, and the configured remote bind address).
-- **CORS:** Cross-Origin Resource Sharing is strictly scoped to the daemon's own origin and the browser extension.
+- **CORS and WebSocket origin:** Only `http://127.0.0.1:<port>`, `http://localhost:<port>` and `http://[::1]:<port>` (the daemon's own port) are allowed, plus any `chrome-extension://` or `moz-extension://` origin. Extension ids differ per install, so the extension scheme is allowed as a whole; the bearer token still guards every request. A WebSocket upgrade with any other `Origin` is refused with 403, and a request with no `Origin` (the CLI) is accepted.
 - **Plugin Notice:** Plugins run as external child processes under your local user account without sandboxing. Only install plugins from trusted sources.
 
 ---
