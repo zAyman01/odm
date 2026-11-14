@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use odm_core::{Job, JobId, JobOptions, JobState, Source, Store, StoreError};
+use odm_core::{Job, JobId, JobOptions, JobState, Segment, Source, Store, StoreError};
 use tempfile::tempdir;
 
 fn sample_job(target_dir: &Path) -> Job {
@@ -151,4 +151,73 @@ fn delete_queue_moves_jobs_to_default() {
         .collect();
     assert_eq!(order, vec![resident.id(), moving.id()]);
     assert!(store.queue_by_name("temporary").is_err());
+}
+
+fn segments(downloaded: [u64; 8]) -> Vec<Segment> {
+    downloaded
+        .iter()
+        .enumerate()
+        .map(|(index, &downloaded)| Segment {
+            index: index as u32,
+            start: index as u64 * 100,
+            end: index as u64 * 100 + 99,
+            downloaded,
+        })
+        .collect()
+}
+
+#[test]
+fn file_store_uses_wal_and_busy_timeout() {
+    let dir = tempdir().unwrap();
+    let store = Store::open(dir.path().join("odm.db")).unwrap();
+
+    assert_eq!(store.journal_mode().unwrap(), "wal");
+    assert!(store.busy_timeout_ms().unwrap() >= 5000);
+}
+
+#[test]
+fn replace_segments_only_writes_changed_rows() {
+    let store = Store::open_in_memory().unwrap();
+    let dir = tempdir().unwrap();
+    let mut job = sample_job(dir.path());
+    store.insert_job(&mut job).unwrap();
+    store
+        .replace_segments(job.id(), &segments([10, 20, 30, 40, 50, 60, 70, 80]))
+        .unwrap();
+
+    let before = store.total_changes().unwrap();
+    store
+        .replace_segments(job.id(), &segments([10, 20, 30, 41, 50, 60, 70, 80]))
+        .unwrap();
+    let changed = store.total_changes().unwrap() - before;
+
+    assert!(
+        changed <= 1,
+        "{changed} rows written for one changed segment"
+    );
+    assert_eq!(
+        store.list_segments(job.id()).unwrap(),
+        segments([10, 20, 30, 41, 50, 60, 70, 80])
+    );
+}
+
+#[test]
+fn replace_segments_drops_surplus_and_adds_new_rows() {
+    let store = Store::open_in_memory().unwrap();
+    let dir = tempdir().unwrap();
+    let mut job = sample_job(dir.path());
+    store.insert_job(&mut job).unwrap();
+    let all = segments([1, 2, 3, 4, 5, 6, 7, 8]);
+
+    store.replace_segments(job.id(), &all[..3]).unwrap();
+    assert_eq!(store.list_segments(job.id()).unwrap(), all[..3].to_vec());
+
+    store.replace_segments(job.id(), &all).unwrap();
+    assert_eq!(store.list_segments(job.id()).unwrap(), all);
+
+    store.replace_segments(job.id(), &all[..2]).unwrap();
+    assert_eq!(store.list_segments(job.id()).unwrap(), all[..2].to_vec());
+
+    store.replace_segments(job.id(), &[]).unwrap();
+    assert!(store.list_segments(job.id()).unwrap().is_empty());
 }

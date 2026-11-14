@@ -1,5 +1,6 @@
 //! SQLite persistence for jobs.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -128,6 +129,10 @@ impl Store {
         }
 
         let connection = Connection::open(path)?;
+        // Readers (the API) then do not block the writer (progress saves). The mode is
+        // stored in the file, and an in-memory database has no journal file to switch.
+        connection
+            .pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get::<_, String>(0))?;
         Self::from_connection(connection)
     }
 
@@ -135,6 +140,24 @@ impl Store {
     pub fn open_in_memory() -> Result<Self, StoreError> {
         let connection = Connection::open_in_memory()?;
         Self::from_connection(connection)
+    }
+
+    /// Returns SQLite's journal mode for this connection, such as `wal`.
+    pub fn journal_mode(&self) -> Result<String, StoreError> {
+        let connection = self.lock()?;
+        Ok(connection.pragma_query_value(None, "journal_mode", |row| row.get(0))?)
+    }
+
+    /// Returns how long, in milliseconds, a query waits for a locked database.
+    pub fn busy_timeout_ms(&self) -> Result<u64, StoreError> {
+        let connection = self.lock()?;
+        let millis: i64 = connection.pragma_query_value(None, "busy_timeout", |row| row.get(0))?;
+        Ok(millis.max(0) as u64)
+    }
+
+    /// Returns how many rows this connection has inserted, updated or deleted so far.
+    pub fn total_changes(&self) -> Result<u64, StoreError> {
+        Ok(self.lock()?.total_changes())
     }
 
     /// Returns the highest applied migration version.
@@ -289,18 +312,43 @@ impl Store {
         Ok(jobs)
     }
 
-    /// Replaces all persisted segments of a job.
+    /// Replaces all persisted segments of a job. Rows that did not change are not
+    /// written, because progress snapshots arrive about once a second.
     pub fn replace_segments(&self, job: JobId, segments: &[Segment]) -> Result<(), StoreError> {
         let mut connection = self.lock()?;
         let transaction = connection.transaction()?;
-        transaction.execute("DELETE FROM segments WHERE job_id = ?1", params![job.0])?;
         {
-            let mut statement = transaction.prepare(
+            let kept: HashSet<i64> = segments
+                .iter()
+                .map(|segment| i64::from(segment.index))
+                .collect();
+            let mut stored = transaction.prepare("SELECT idx FROM segments WHERE job_id = ?1")?;
+            let stale: Vec<i64> = stored
+                .query_map(params![job.0], |row| row.get(0))?
+                .collect::<Result<Vec<i64>, _>>()?
+                .into_iter()
+                .filter(|idx| !kept.contains(idx))
+                .collect();
+            let mut delete =
+                transaction.prepare("DELETE FROM segments WHERE job_id = ?1 AND idx = ?2")?;
+            for idx in stale {
+                delete.execute(params![job.0, idx])?;
+            }
+
+            // The WHERE clause skips a row that already holds these values.
+            let mut upsert = transaction.prepare(
                 "INSERT INTO segments (job_id, idx, start, \"end\", downloaded)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT (job_id, idx) DO UPDATE SET
+                     start = excluded.start,
+                     \"end\" = excluded.\"end\",
+                     downloaded = excluded.downloaded
+                 WHERE start IS NOT excluded.start
+                    OR \"end\" IS NOT excluded.\"end\"
+                    OR downloaded IS NOT excluded.downloaded",
             )?;
             for segment in segments {
-                statement.execute(params![
+                upsert.execute(params![
                     job.0,
                     i64::from(segment.index),
                     segment.start as i64,
