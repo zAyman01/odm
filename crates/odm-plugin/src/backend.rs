@@ -42,7 +42,8 @@ impl PluginBackend {
         &self.registry
     }
 
-    async fn resolve_for_url(&self, url: &str) -> Result<ResolvedDownload, BackendError> {
+    /// Asks the matching plugin to resolve `url`; the results come in the plugin's order of preference.
+    async fn resolve_all(&self, url: &str) -> Result<Vec<ResolvedDownload>, BackendError> {
         let (manifest, plugin_dir) = {
             let reg = self.registry.read().await;
             let (m, d) = reg.find_for_url(url).ok_or(BackendError::Unsupported)?;
@@ -53,11 +54,12 @@ impl PluginBackend {
             .await
             .map_err(|e| BackendError::Plugin(e.to_string()))?;
 
-        response
-            .downloads
-            .into_iter()
-            .next()
-            .ok_or_else(|| BackendError::Plugin("plugin returned empty downloads list".to_string()))
+        if response.downloads.is_empty() {
+            return Err(BackendError::Plugin(
+                "plugin returned empty downloads list".to_string(),
+            ));
+        }
+        Ok(response.downloads)
     }
 }
 
@@ -147,8 +149,57 @@ impl Backend for PluginBackend {
 
     async fn probe(&self, source: &Source, opts: &JobOptions) -> Result<ProbeResult, BackendError> {
         let url = source.url().ok_or(BackendError::Unsupported)?;
-        let resolved = self.resolve_for_url(url).await?;
+        let mut last_error = BackendError::Unsupported;
+        for resolved in self.resolve_all(url).await? {
+            match self.probe_resolved(&resolved, opts).await {
+                Ok(probe) => return Ok(probe),
+                Err(error) => last_error = error,
+            }
+        }
+        Err(last_error)
+    }
 
+    async fn run(&self, ctx: JobContext) -> Result<RunOutcome, BackendError> {
+        let saved = ctx
+            .job
+            .backend_state()
+            .and_then(|state| serde_json::from_str::<ResolvedDownload>(state).ok());
+        let candidates = match saved {
+            Some(resolved) => vec![resolved],
+            None => {
+                let url = ctx.job.source().url().ok_or(BackendError::Unsupported)?;
+                self.resolve_all(url).await?
+            }
+        };
+
+        let mut candidates = candidates.into_iter().peekable();
+        let mut last_error = BackendError::Unsupported;
+        while let Some(resolved) = candidates.next() {
+            // A resume must come back to the result that was in progress.
+            if let Ok(json) = serde_json::to_string(&resolved) {
+                let _ = ctx.store.set_backend_state(ctx.job.id(), &json);
+            }
+            match self.download(&ctx, &resolved).await {
+                Ok(outcome) => return Ok(outcome),
+                Err(error) => {
+                    // The next result is a different file; it must not resume these bytes.
+                    if candidates.peek().is_some() {
+                        let _ = tokio::fs::remove_file(ctx.job.part_path()).await;
+                    }
+                    last_error = error;
+                }
+            }
+        }
+        Err(last_error)
+    }
+}
+
+impl PluginBackend {
+    async fn probe_resolved(
+        &self,
+        resolved: &ResolvedDownload,
+        opts: &JobOptions,
+    ) -> Result<ProbeResult, BackendError> {
         let mut head_req = self.client.head(&resolved.url);
         head_req = apply_headers(head_req, &resolved.headers, opts)?;
         let head_res = head_req.send().await;
@@ -208,24 +259,11 @@ impl Backend for PluginBackend {
         })
     }
 
-    async fn run(&self, ctx: JobContext) -> Result<RunOutcome, BackendError> {
-        let resolved = if let Some(state_str) = ctx.job.backend_state() {
-            match serde_json::from_str::<ResolvedDownload>(state_str) {
-                Ok(r) => r,
-                Err(_) => {
-                    let url = ctx.job.source().url().ok_or(BackendError::Unsupported)?;
-                    self.resolve_for_url(url).await?
-                }
-            }
-        } else {
-            let url = ctx.job.source().url().ok_or(BackendError::Unsupported)?;
-            let r = self.resolve_for_url(url).await?;
-            if let Ok(json) = serde_json::to_string(&r) {
-                let _ = ctx.store.set_backend_state(ctx.job.id(), &json);
-            }
-            r
-        };
-
+    async fn download(
+        &self,
+        ctx: &JobContext,
+        resolved: &ResolvedDownload,
+    ) -> Result<RunOutcome, BackendError> {
         if ctx.control.is_cancelled() {
             return Ok(RunOutcome::Cancelled);
         }

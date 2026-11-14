@@ -49,6 +49,16 @@ fn main() {
                 format!(r#"{{"downloads": [{{"url": "{}", "headers": {{"X-Mock-Plugin": "active"}}, "filename": "resolved_file.bin"}}]}}"#, target_url)
             );
         }
+        "two" => {
+            let mut input = String::new();
+            let _ = io::stdin().read_to_string(&mut input);
+            let first = args.get(2).map(|s| s.as_str()).unwrap_or("");
+            let second = args.get(3).map(|s| s.as_str()).unwrap_or("");
+            println!(
+                "{}",
+                format!(r#"{{"downloads": [{{"url": "{}"}}, {{"url": "{}"}}]}}"#, first, second)
+            );
+        }
         "fail" => {
             eprintln!("simulated resolver failure");
             std::process::exit(1);
@@ -350,4 +360,66 @@ async fn test_plugin_backend_probe_plugin_error() {
         }
         other => panic!("expected BackendError::Plugin, got: {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn plugin_with_two_results_tries_second_when_first_fails() {
+    let payload = b"payload of the second plugin result".to_vec();
+    let server = TestServer::start(payload.clone()).await;
+    let temp_dir = TempDir::new().unwrap();
+    let bin_path = compile_mock_plugin(temp_dir.path());
+    let plugins_dir = setup_test_plugins(temp_dir.path(), &bin_path, &server.file_url());
+
+    let two_dir = plugins_dir.join("two_plugin");
+    std::fs::create_dir_all(&two_dir).unwrap();
+    std::fs::copy(&bin_path, two_dir.join(fake_binary_name())).unwrap();
+    std::fs::write(
+        two_dir.join("plugin.toml"),
+        format!(
+            r#"[plugin]
+name = "two-results"
+version = "1.0.0"
+description = "Resolves to a broken URL, then a working one"
+role = "resolver"
+url_patterns = ["*://two.example.com/*"]
+command = ["{}", "two", "http://{}/fail.bin", "{}"]
+"#,
+            fake_binary_name(),
+            server.addr,
+            server.file_url()
+        ),
+    )
+    .unwrap();
+
+    let mut registry = PluginRegistry::new(plugins_dir);
+    registry.discover().unwrap();
+    let backend = PluginBackend::new(Arc::new(tokio::sync::RwLock::new(registry)));
+    let source = Source::Url("https://two.example.com/item/1".to_string());
+
+    let probe = backend
+        .probe(&source, &JobOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(probe.total_bytes, Some(payload.len() as u64));
+
+    let download_dir = temp_dir.path().join("downloads");
+    std::fs::create_dir_all(&download_dir).unwrap();
+    let mut job = Job::new(source, download_dir, JobOptions::default());
+    job.apply_probe(probe);
+    let store = Store::open_in_memory().unwrap();
+    store.insert_job(&mut job).unwrap();
+    let (_control_handle, control) = ControlToken::new();
+    let (progress, _progress_rx) = ProgressSink::new();
+    let ctx = JobContext {
+        job: job.clone(),
+        control,
+        progress,
+        store: store.clone(),
+        limiter: Limiter::new(Arc::new(TokenBucket::new(0)), None),
+    };
+
+    let outcome = backend.run(ctx).await.unwrap();
+
+    assert_eq!(outcome, RunOutcome::Completed);
+    assert_eq!(std::fs::read(job.target_path()).unwrap(), payload);
 }
