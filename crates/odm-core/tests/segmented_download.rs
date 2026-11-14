@@ -34,7 +34,7 @@ struct TestServer {
 }
 
 struct ServerState {
-    payload: Vec<u8>,
+    payload: Mutex<Vec<u8>>,
     etag: Mutex<String>,
     supports_ranges: bool,
     slow: bool,
@@ -46,7 +46,7 @@ struct ServerState {
 impl TestServer {
     async fn start(payload: Vec<u8>, supports_ranges: bool, slow: bool) -> Self {
         let state = Arc::new(ServerState {
-            payload,
+            payload: Mutex::new(payload),
             etag: Mutex::new("\"v1\"".to_string()),
             supports_ranges,
             slow,
@@ -76,6 +76,10 @@ impl TestServer {
     fn set_etag(&self, etag: &str) {
         *self.state.etag.lock().unwrap() = etag.to_string();
     }
+
+    fn set_payload(&self, payload: Vec<u8>) {
+        *self.state.payload.lock().unwrap() = payload;
+    }
 }
 
 impl Drop for TestServer {
@@ -93,7 +97,7 @@ async fn serve(
         let mut response = HeaderMap::new();
         response.insert(
             header::CONTENT_LENGTH,
-            HeaderValue::from_str(&state.payload.len().to_string()).unwrap(),
+            HeaderValue::from_str(&state.payload.lock().unwrap().len().to_string()).unwrap(),
         );
         response.insert(
             header::ETAG,
@@ -149,13 +153,13 @@ async fn serve(
 
     match range {
         Some((start, end)) if state.supports_ranges => {
-            let end = end.min(state.payload.len() - 1);
-            let slice = state.payload[start..=end].to_vec();
+            let payload = state.payload.lock().unwrap().clone();
+            let end = end.min(payload.len() - 1);
+            let slice = payload[start..=end].to_vec();
             let mut response = HeaderMap::new();
             response.insert(
                 header::CONTENT_RANGE,
-                HeaderValue::from_str(&format!("bytes {start}-{end}/{}", state.payload.len()))
-                    .unwrap(),
+                HeaderValue::from_str(&format!("bytes {start}-{end}/{}", payload.len())).unwrap(),
             );
             response.insert(
                 header::CONTENT_LENGTH,
@@ -173,7 +177,7 @@ fn full(state: &ServerState, status: StatusCode) -> Response {
     let mut response = HeaderMap::new();
     response.insert(
         header::CONTENT_LENGTH,
-        HeaderValue::from_str(&state.payload.len().to_string()).unwrap(),
+        HeaderValue::from_str(&state.payload.lock().unwrap().len().to_string()).unwrap(),
     );
     response.insert(
         header::ETAG,
@@ -182,7 +186,10 @@ fn full(state: &ServerState, status: StatusCode) -> Response {
     (
         status,
         response,
-        body(state.payload.clone(), if state.slow { 5 } else { 0 }),
+        body(
+            state.payload.lock().unwrap().clone(),
+            if state.slow { 5 } else { 0 },
+        ),
     )
         .into_response()
 }
@@ -207,7 +214,7 @@ fn probe(server: &TestServer, supports_ranges: bool) -> ProbeResult {
     ProbeResult {
         backend: BackendKind::Http,
         filename: "file.bin".to_string(),
-        total_bytes: Some(server.state.payload.len() as u64),
+        total_bytes: Some(server.state.payload.lock().unwrap().len() as u64),
         supports_ranges,
         etag: Some(server.state.etag.lock().unwrap().clone()),
         last_modified: None,
@@ -506,4 +513,118 @@ async fn retry_count_option_limits_the_attempts_after_server_errors() {
 
     assert!(result.is_err());
     assert_eq!(gets.load(Ordering::SeqCst), 2);
+}
+
+/// A job whose saved segments say `done_each` bytes of both halves are on disk.
+fn job_with_saved_halves(
+    server: &TestServer,
+    store: &Store,
+    dir: &Path,
+    old: &[u8],
+    write_part: bool,
+    etag: &str,
+) -> Job {
+    let mut job = Job::new(
+        Source::Url(server.url()),
+        dir.to_path_buf(),
+        JobOptions {
+            segments: Some(2),
+            ..JobOptions::default()
+        },
+    );
+    let mut original = probe(server, true);
+    original.etag = Some(etag.to_string());
+    job.apply_probe(original);
+    store.insert_job(&mut job).unwrap();
+
+    let half = old.len() / 2;
+    let quarter = half / 2;
+    if write_part {
+        let mut part = vec![0_u8; old.len()];
+        part[..quarter].copy_from_slice(&old[..quarter]);
+        part[half..half + quarter].copy_from_slice(&old[half..half + quarter]);
+        std::fs::write(job.part_path(), part).unwrap();
+    }
+    store
+        .replace_segments(
+            job.id(),
+            &[
+                Segment {
+                    index: 0,
+                    start: 0,
+                    end: (half - 1) as u64,
+                    downloaded: quarter as u64,
+                },
+                Segment {
+                    index: 1,
+                    start: half as u64,
+                    end: (old.len() - 1) as u64,
+                    downloaded: quarter as u64,
+                },
+            ],
+        )
+        .unwrap();
+    job
+}
+
+async fn run_to_end(job: &Job, store: &Store) -> Result<RunOutcome, odm_core::BackendError> {
+    let (_handle, control) = ControlToken::new();
+    let (progress, _updates) = ProgressSink::new();
+    HttpBackend::new()
+        .unwrap()
+        .run(context(job, store, control, progress))
+        .await
+}
+
+#[tokio::test]
+async fn changed_file_after_restart_restarts_cleanly() {
+    let old = payload(BLOCK * 8);
+    let new: Vec<u8> = old.iter().map(|byte| byte.wrapping_add(1)).collect();
+    let server = TestServer::start(old.as_ref().clone(), true, false).await;
+    let store = Store::open_in_memory().unwrap();
+    let dir = TempDir::new().unwrap();
+    let job = job_with_saved_halves(&server, &store, dir.path(), &old, true, "\"v1\"");
+    server.set_payload(new.clone());
+    server.set_etag("\"v2\"");
+
+    let outcome = run_to_end(&job, &store).await.unwrap();
+
+    assert_eq!(outcome, RunOutcome::Completed);
+    assert_eq!(std::fs::read(job.target_path()).unwrap(), new);
+}
+
+#[tokio::test]
+async fn weak_etag_is_not_sent_in_if_range() {
+    let data = payload(BLOCK * 8);
+    let server = TestServer::start(data.as_ref().clone(), true, false).await;
+    server.set_etag("W/\"abc\"");
+    let store = Store::open_in_memory().unwrap();
+    let dir = TempDir::new().unwrap();
+    let job = job_with_saved_halves(&server, &store, dir.path(), &data, true, "W/\"abc\"");
+
+    let outcome = run_to_end(&job, &store).await.unwrap();
+
+    assert_eq!(outcome, RunOutcome::Completed);
+    assert!(server.state.if_ranges.lock().unwrap().is_empty());
+    assert_eq!(
+        std::fs::read(job.target_path()).unwrap().as_slice(),
+        data.as_slice()
+    );
+}
+
+#[tokio::test]
+async fn missing_part_file_resets_segments() {
+    let data = payload(BLOCK * 8);
+    let server = TestServer::start(data.as_ref().clone(), true, false).await;
+    let store = Store::open_in_memory().unwrap();
+    let dir = TempDir::new().unwrap();
+    let job = job_with_saved_halves(&server, &store, dir.path(), &data, false, "\"v1\"");
+
+    let outcome = run_to_end(&job, &store).await.unwrap();
+
+    assert_eq!(outcome, RunOutcome::Completed);
+    assert_eq!(
+        std::fs::read(job.target_path()).unwrap().as_slice(),
+        data.as_slice()
+    );
 }

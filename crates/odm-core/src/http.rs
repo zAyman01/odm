@@ -19,7 +19,7 @@ use url::Url;
 
 use crate::backend::{Backend, BackendError, JobContext, RunOutcome};
 use crate::filename::sanitize_filename;
-use crate::job::{BackendKind, JobOptions, ProbeResult, Source};
+use crate::job::{BackendKind, Job, JobOptions, ProbeResult, Source};
 use crate::segment::Segment;
 
 const DEFAULT_SEGMENTS: u32 = 8;
@@ -63,11 +63,25 @@ impl From<&SegmentWork> for Segment {
     }
 }
 
+/// Returns how many segments to use for `size` bytes when `requested` were asked for.
+fn segment_count(requested: u32, size: u64) -> u32 {
+    let most_useful = u32::try_from(size).unwrap_or(u32::MAX);
+    requested.clamp(1, MAX_SEGMENTS).min(most_useful).max(1)
+}
+
+/// Returns the validator that makes a ranged request conditional: a strong ETag,
+/// otherwise `Last-Modified`. A weak ETag must not be used in `If-Range`.
+fn if_range_validator(job: &Job) -> Option<&str> {
+    job.etag()
+        .filter(|etag| !etag.trim_start().starts_with("W/"))
+        .or_else(|| job.last_modified())
+}
+
 fn initial_segments(size: u64, count: u32) -> Vec<SegmentWork> {
     if size == 0 {
         return Vec::new();
     }
-    let count = count.clamp(1, MAX_SEGMENTS).min(size as u32).max(1);
+    let count = segment_count(count, size);
     let mut segments = Vec::with_capacity(count as usize);
     for i in 0..count {
         let start = (i as u64) * size / (count as u64);
@@ -261,14 +275,7 @@ impl HttpBackend {
         tokio::fs::create_dir_all(ctx.job.target_dir()).await?;
         let part_path = ctx.job.part_path();
 
-        let count = ctx
-            .job
-            .options()
-            .segments
-            .unwrap_or(DEFAULT_SEGMENTS)
-            .clamp(1, MAX_SEGMENTS)
-            .min(size as u32)
-            .max(1);
+        let count = segment_count(ctx.job.options().segments.unwrap_or(DEFAULT_SEGMENTS), size);
 
         let persisted = ctx.store.list_segments(ctx.job.id())?;
         let works: Vec<SegmentWork> = persisted
@@ -283,7 +290,9 @@ impl HttpBackend {
             })
             .collect();
 
-        let initial = if segments_cover(&works, size) {
+        // Saved progress is worthless when the partial file is gone.
+        let progress_lost = works.iter().any(|work| work.downloaded > 0) && !part_path.exists();
+        let initial = if segments_cover(&works, size) && !progress_lost {
             works
         } else {
             ctx.store.clear_segments(ctx.job.id())?;
@@ -330,6 +339,7 @@ impl HttpBackend {
             segments: initial,
             restart_flag: false,
             restart_count: 0,
+            use_validator: true,
             last_saved: Instant::now(),
             mirrors,
             mirror_rr: 0,
@@ -433,6 +443,9 @@ struct SharedState {
     segments: Vec<SegmentWork>,
     restart_flag: bool,
     restart_count: u32,
+    /// Whether ranged requests may carry `If-Range`; off once a restart began,
+    /// because the saved validator describes the file that was replaced.
+    use_validator: bool,
     last_saved: Instant,
     mirrors: Vec<MirrorCandidate>,
     mirror_rr: usize,
@@ -562,7 +575,7 @@ async fn download_segment(
             return Ok(None);
         }
 
-        let (curr_start, curr_end, has_progress) = {
+        let (curr_start, curr_end, send_validator) = {
             let s = shared.lock().unwrap_or_else(|p| p.into_inner());
             if s.restart_flag {
                 return Ok(None);
@@ -572,7 +585,11 @@ async fn download_segment(
             }
             let seg = &s.segments[seg_idx];
             let has_prog = s.segments.iter().any(|x| x.downloaded > 0);
-            (seg.start + seg.downloaded, seg.end, has_prog)
+            (
+                seg.start + seg.downloaded,
+                seg.end,
+                has_prog && s.use_validator,
+            )
         };
 
         if curr_start > curr_end {
@@ -591,12 +608,8 @@ async fn download_segment(
 
         let mut req = backend.request(Method::GET, url.clone(), ctx.job.options())?;
         req = req.header(RANGE, format!("bytes={curr_start}-{curr_end}"));
-        if has_progress {
-            if let Some(etag) = ctx.job.etag() {
-                req = req.header(IF_RANGE, etag);
-            } else if let Some(lm) = ctx.job.last_modified() {
-                req = req.header(IF_RANGE, lm);
-            }
+        if send_validator && let Some(validator) = if_range_validator(&ctx.job) {
+            req = req.header(IF_RANGE, validator);
         }
 
         let response = match req.send().await {
@@ -637,13 +650,20 @@ async fn download_segment(
             }
         }
 
-        if status == StatusCode::OK {
+        // A full body or a failed precondition means the file changed (or the
+        // server ignores ranges): start over once, and give up the second time.
+        if status == StatusCode::OK || status == StatusCode::PRECONDITION_FAILED {
             let mut s = shared.lock().unwrap_or_else(|p| p.into_inner());
+            if s.restart_flag {
+                // Another worker already asked for the restart.
+                return Ok(None);
+            }
             if s.restart_count > 0 {
                 return Err(BackendError::RangeIgnored);
             }
             s.restart_count += 1;
             s.restart_flag = true;
+            s.use_validator = false;
             return Ok(None);
         }
 
@@ -944,6 +964,17 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_DISPOSITION, HeaderValue::from_static(value));
         headers
+    }
+
+    #[test]
+    fn segment_count_is_correct_above_4_gib() {
+        let gib = 1024_u64 * 1024 * 1024;
+        for size in [4 * gib + 1, 5 * gib, 8 * gib] {
+            let plan = initial_segments(size, 8);
+            assert_eq!(plan.len(), 8, "size {size}");
+            assert!(segments_cover(&plan, size), "size {size}");
+            assert_eq!(plan.iter().map(SegmentWork::len).sum::<u64>(), size);
+        }
     }
 
     #[test]
