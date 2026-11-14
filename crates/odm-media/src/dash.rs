@@ -114,10 +114,10 @@ macro_rules! check_drm_in_mpd {
 }
 
 macro_rules! extract_segments_from_rep {
-    ($manifest_url:expr, $mpd_base:expr, $period:expr, $adaptation:expr, $rep:expr) => {{
+    ($manifest_url:expr, $mpd:expr, $period:expr, $adaptation:expr, $rep:expr) => {{
         let mut segments: Vec<DashSegment> = Vec::new();
         let mut base = $manifest_url.clone();
-        if let Some(b) = $mpd_base.first() {
+        if let Some(b) = $mpd.base_url.first() {
             if let Ok(u) = base.join(&b.base) {
                 base = u;
             }
@@ -223,9 +223,11 @@ macro_rules! extract_segments_from_rep {
                     let start_num = st.startNumber.unwrap_or(1);
                     let count = if let Some(end_num) = st.endNumber {
                         end_num.saturating_sub(start_num) + 1
-                    } else if let (Some(duration), Some(period_dur)) =
-                        (st.duration, $period.duration)
-                    {
+                    } else if let (Some(duration), Some(period_dur)) = (
+                        st.duration,
+                        // The nearest ancestor that states a duration wins.
+                        $period.duration.or($mpd.mediaPresentationDuration),
+                    ) {
                         let timescale = st.timescale.unwrap_or(1) as f64;
                         let seg_dur_secs = duration / timescale;
                         if seg_dur_secs > 0.0 {
@@ -383,6 +385,50 @@ impl DashBackend {
     }
 }
 
+impl DashBackend {
+    /// Streams one segment to `file` as it arrives, so a large single-file
+    /// representation never sits in memory. A failed segment is cut off the
+    /// file again, so a later resume does not append after a partial one.
+    async fn download_segment(
+        &self,
+        ctx: &JobContext,
+        seg: &DashSegment,
+        file: &mut tokio::fs::File,
+        downloaded_bytes: &mut u64,
+    ) -> Result<(), BackendError> {
+        let start_len = file.metadata().await?.len();
+        let result = self.stream_segment(ctx, seg, file, downloaded_bytes).await;
+        if result.is_err() {
+            let _ = file.set_len(start_len).await;
+        }
+        result
+    }
+
+    async fn stream_segment(
+        &self,
+        ctx: &JobContext,
+        seg: &DashSegment,
+        file: &mut tokio::fs::File,
+        downloaded_bytes: &mut u64,
+    ) -> Result<(), BackendError> {
+        let mut request = self.client.get(seg.url.clone());
+        request = apply_options(request, ctx.job.options());
+        if let Some((start, end)) = seg.byte_range {
+            request = request.header("Range", format!("bytes={start}-{end}"));
+        }
+        let mut response = request.send().await?.error_for_status()?;
+        while let Some(chunk) = response.chunk().await? {
+            ctx.limiter.acquire(chunk.len() as u64).await;
+            file.write_all(&chunk).await?;
+            file.flush().await?;
+            *downloaded_bytes += chunk.len() as u64;
+            ctx.progress
+                .report(*downloaded_bytes, ctx.job.total_bytes());
+        }
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl Backend for DashBackend {
     fn kind(&self) -> BackendKind {
@@ -424,6 +470,7 @@ impl Backend for DashBackend {
                 "DRM-protected streams are not supported".to_string(),
             ));
         }
+        reject_live(mpd.mpdtype.as_deref())?;
 
         let filename = derive_filename(&url, "mp4");
 
@@ -480,6 +527,7 @@ impl Backend for DashBackend {
                 "DRM-protected streams are not supported".to_string(),
             ));
         }
+        reject_live(mpd.mpdtype.as_deref())?;
 
         let quality_pref = ctx.job.options().quality.as_deref();
 
@@ -520,13 +568,8 @@ impl Backend for DashBackend {
                             false
                         };
 
-                        let segs = extract_segments_from_rep!(
-                            &base_url,
-                            &mpd.base_url,
-                            period,
-                            adaptation,
-                            rep
-                        );
+                        let segs =
+                            extract_segments_from_rep!(&base_url, &mpd, period, adaptation, rep);
 
                         if is_match && preferred_video.is_none() {
                             preferred_video = Some((segs.clone(), q_id.clone()));
@@ -559,13 +602,8 @@ impl Backend for DashBackend {
                 if is_audio_adaptation!(adaptation) {
                     for rep in &adaptation.representations {
                         let bw = rep.bandwidth.unwrap_or(0);
-                        let segs = extract_segments_from_rep!(
-                            &base_url,
-                            &mpd.base_url,
-                            period,
-                            adaptation,
-                            rep
-                        );
+                        let segs =
+                            extract_segments_from_rep!(&base_url, &mpd, period, adaptation, rep);
                         if best_audio
                             .as_ref()
                             .is_none_or(|(best_bw, _)| bw >= *best_bw)
@@ -673,21 +711,8 @@ impl Backend for DashBackend {
                 return Ok(RunOutcome::Paused);
             }
 
-            let mut seg_req = self.client.get(seg.url.clone());
-            seg_req = apply_options(seg_req, ctx.job.options());
-            if let Some((start, end)) = seg.byte_range {
-                seg_req = seg_req.header("Range", format!("bytes={start}-{end}"));
-            }
-
-            let seg_res = seg_req.send().await?.error_for_status()?;
-            let chunk = seg_res.bytes().await?;
-
-            ctx.limiter.acquire(chunk.len() as u64).await;
-            video_file.write_all(&chunk).await?;
-            video_file.flush().await?;
-
-            downloaded_bytes += chunk.len() as u64;
-            ctx.progress.report(downloaded_bytes, ctx.job.total_bytes());
+            self.download_segment(&ctx, seg, &mut video_file, &mut downloaded_bytes)
+                .await?;
 
             resume_state.completed_video_segments.push(seg_idx);
             let state_json = serde_json::to_string(&resume_state)
@@ -723,21 +748,8 @@ impl Backend for DashBackend {
                 return Ok(RunOutcome::Paused);
             }
 
-            let mut seg_req = self.client.get(seg.url.clone());
-            seg_req = apply_options(seg_req, ctx.job.options());
-            if let Some((start, end)) = seg.byte_range {
-                seg_req = seg_req.header("Range", format!("bytes={start}-{end}"));
-            }
-
-            let seg_res = seg_req.send().await?.error_for_status()?;
-            let chunk = seg_res.bytes().await?;
-
-            ctx.limiter.acquire(chunk.len() as u64).await;
-            audio_file.write_all(&chunk).await?;
-            audio_file.flush().await?;
-
-            downloaded_bytes += chunk.len() as u64;
-            ctx.progress.report(downloaded_bytes, ctx.job.total_bytes());
+            self.download_segment(&ctx, seg, &mut audio_file, &mut downloaded_bytes)
+                .await?;
 
             resume_state.completed_audio_segments.push(seg_idx);
             let state_json = serde_json::to_string(&resume_state)
@@ -777,6 +789,16 @@ impl Backend for DashBackend {
 
         Ok(RunOutcome::Completed)
     }
+}
+
+/// A live manifest has no end, so there is nothing finite to download.
+fn reject_live(mpd_type: Option<&str>) -> Result<(), BackendError> {
+    if mpd_type == Some("dynamic") {
+        return Err(BackendError::Media(
+            "live streams are not supported".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn apply_options(mut builder: RequestBuilder, opts: &JobOptions) -> RequestBuilder {

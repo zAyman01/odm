@@ -31,6 +31,7 @@ struct ServerState {
     seg2: Vec<u8>,
     seg1_requested: Arc<Notify>,
     seg1_fetch_count: AtomicUsize,
+    init_fetch_count: AtomicUsize,
 }
 
 struct TestServer {
@@ -50,6 +51,7 @@ impl TestServer {
             seg2: vec![0xCC; SEGMENT_SIZE],
             seg1_requested: Arc::new(Notify::new()),
             seg1_fetch_count: AtomicUsize::new(0),
+            init_fetch_count: AtomicUsize::new(0),
         });
 
         let app = Router::new()
@@ -57,6 +59,9 @@ impl TestServer {
             .route("/480p.m3u8", get(playlist_480p))
             .route("/720p.m3u8", get(playlist_720p))
             .route("/drm.m3u8", get(drm_playlist))
+            .route("/map.m3u8", get(map_playlist))
+            .route("/live.m3u8", get(live_playlist))
+            .route("/init.mp4", get(get_init))
             .route("/seg0.ts", get(get_seg0))
             .route("/seg1.ts", get(get_seg1))
             .route("/seg2.ts", get(get_seg2))
@@ -149,6 +154,45 @@ seg0.ts\n\
         body.to_string(),
     )
         .into_response()
+}
+
+async fn map_playlist() -> Response {
+    let body = "#EXTM3U\n\
+#EXT-X-VERSION:7\n\
+#EXT-X-TARGETDURATION:10\n\
+#EXT-X-MEDIA-SEQUENCE:0\n\
+#EXT-X-MAP:URI=\"init.mp4\"\n\
+#EXTINF:10.0,\n\
+seg0.ts\n\
+#EXTINF:10.0,\n\
+seg1.ts\n\
+#EXT-X-ENDLIST\n";
+    (
+        [(CONTENT_TYPE, "application/vnd.apple.mpegurl")],
+        body.to_string(),
+    )
+        .into_response()
+}
+
+async fn live_playlist() -> Response {
+    let body = "#EXTM3U\n\
+#EXT-X-VERSION:3\n\
+#EXT-X-TARGETDURATION:10\n\
+#EXT-X-MEDIA-SEQUENCE:100\n\
+#EXTINF:10.0,\n\
+seg0.ts\n\
+#EXTINF:10.0,\n\
+seg1.ts\n";
+    (
+        [(CONTENT_TYPE, "application/vnd.apple.mpegurl")],
+        body.to_string(),
+    )
+        .into_response()
+}
+
+async fn get_init(State(state): State<Arc<ServerState>>) -> Response {
+    state.init_fetch_count.fetch_add(1, Ordering::SeqCst);
+    (StatusCode::OK, Bytes::from(vec![0x99; 1024])).into_response()
 }
 
 async fn get_seg0(State(state): State<Arc<ServerState>>) -> Response {
@@ -428,5 +472,68 @@ async fn drm_detection_fails_probe() {
     assert!(
         err_msg.contains("DRM") || err_msg.contains("not supported"),
         "Error message should mention DRM or not supported: {err_msg}"
+    );
+}
+
+#[tokio::test]
+async fn hls_ext_x_map_init_segment_is_prepended() {
+    let server = TestServer::start().await;
+    let backend = HlsBackend::new(reqwest::Client::new(), None);
+    let source = Source::Url(server.url("/map.m3u8"));
+    let temp_dir = TempDir::new().unwrap();
+    let mut job = Job::new(
+        source.clone(),
+        temp_dir.path().to_path_buf(),
+        JobOptions::default(),
+    );
+    job.apply_probe(
+        backend
+            .probe(&source, &JobOptions::default())
+            .await
+            .unwrap(),
+    );
+    let store = Store::open_in_memory().unwrap();
+    store.insert_job(&mut job).unwrap();
+    let (_control_handle, control) = ControlToken::new();
+    let (progress, _progress_rx) = ProgressSink::new();
+
+    let outcome = backend
+        .run(JobContext {
+            job: job.clone(),
+            control,
+            progress,
+            store,
+            limiter: Limiter::new(Arc::new(TokenBucket::new(0)), None),
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(outcome, RunOutcome::Completed);
+    let expected = [
+        vec![0x99; 1024].as_slice(),
+        server.state.seg0.as_slice(),
+        server.state.seg1.as_slice(),
+    ]
+    .concat();
+    assert_eq!(std::fs::read(job.target_path()).unwrap(), expected);
+    assert_eq!(server.state.init_fetch_count.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn hls_live_playlist_is_rejected() {
+    let server = TestServer::start().await;
+    let backend = HlsBackend::new(reqwest::Client::new(), None);
+
+    let error = backend
+        .probe(
+            &Source::Url(server.url("/live.m3u8")),
+            &JobOptions::default(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(
+        error.to_string().contains("live streams are not supported"),
+        "got: {error}"
     );
 }

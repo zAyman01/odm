@@ -127,6 +127,37 @@ impl HlsBackend {
     }
 }
 
+impl HlsBackend {
+    /// Downloads the initialization section named by an `EXT-X-MAP` tag.
+    async fn fetch_init_segment(
+        &self,
+        ctx: &JobContext,
+        media_url: &Url,
+        map: &m3u8_rs::Map,
+    ) -> Result<Vec<u8>, BackendError> {
+        let url = media_url
+            .join(&map.uri)
+            .map_err(|e| BackendError::InvalidUrl(e.to_string()))?;
+        let mut request = apply_options(self.client.get(url), ctx.job.options());
+        if let Some(range) = &map.byte_range {
+            let start = range.offset.unwrap_or(0);
+            let end = start.saturating_add(range.length).saturating_sub(1);
+            request = request.header("Range", format!("bytes={start}-{end}"));
+        }
+        let response = request.send().await?.error_for_status()?;
+        Ok(response.bytes().await?.to_vec())
+    }
+}
+
+/// Identifies an init segment, so it is written once however many segments name it.
+fn map_key(map: &m3u8_rs::Map) -> String {
+    let range = map
+        .byte_range
+        .as_ref()
+        .map(|range| (range.offset, range.length));
+    format!("{}#{range:?}", map.uri)
+}
+
 #[async_trait]
 impl Backend for HlsBackend {
     fn kind(&self) -> BackendKind {
@@ -172,6 +203,11 @@ impl Backend for HlsBackend {
                 })
             }
             m3u8_rs::Playlist::MediaPlaylist(media) => {
+                if !media.end_list {
+                    return Err(BackendError::Media(
+                        "live streams are not supported".to_string(),
+                    ));
+                }
                 let filename = derive_filename(&url, default_ext);
                 let total_bytes = estimate_media_size(&self.client, &url, &media.segments).await;
                 Ok(ProbeResult {
@@ -261,6 +297,12 @@ impl Backend for HlsBackend {
             m3u8_rs::Playlist::MediaPlaylist(media) => (media, base_url, None),
         };
 
+        if !media.end_list {
+            return Err(BackendError::Media(
+                "live streams are not supported".to_string(),
+            ));
+        }
+
         let total_segments = media.segments.len() as u32;
 
         let saved_state_str = ctx
@@ -306,6 +348,9 @@ impl Backend for HlsBackend {
 
         let mut key_cache: HashMap<String, [u8; 16]> = HashMap::new();
         let mut active_key: Option<m3u8_rs::Key> = None;
+        // The init segment in effect, and the one already written to the file.
+        let mut current_map: Option<&m3u8_rs::Map> = None;
+        let mut written_map: Option<String> = None;
 
         for (idx, seg) in media.segments.iter().enumerate() {
             let seg_idx = idx as u32;
@@ -313,8 +358,12 @@ impl Backend for HlsBackend {
             if let Some(ref k) = seg.key {
                 active_key = Some(k.clone());
             }
+            if let Some(map) = &seg.map {
+                current_map = Some(map);
+            }
 
             if resume_state.completed_segments.contains(&seg_idx) {
+                written_map = current_map.map(map_key);
                 continue;
             }
 
@@ -328,6 +377,18 @@ impl Backend for HlsBackend {
                     .map_err(|e| BackendError::Media(e.to_string()))?;
                 ctx.store.set_backend_state(ctx.job.id(), &state_json)?;
                 return Ok(RunOutcome::Paused);
+            }
+
+            if let Some(map) = current_map
+                && written_map.as_deref() != Some(map_key(map).as_str())
+            {
+                let init = self.fetch_init_segment(&ctx, &media_url, map).await?;
+                ctx.limiter.acquire(init.len() as u64).await;
+                file.write_all(&init).await?;
+                file.flush().await?;
+                downloaded_bytes += init.len() as u64;
+                ctx.progress.report(downloaded_bytes, ctx.job.total_bytes());
+                written_map = Some(map_key(map));
             }
 
             let seg_url = media_url

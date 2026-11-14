@@ -4,7 +4,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use axum::Router;
 use axum::body::Bytes;
@@ -492,4 +492,215 @@ async fn cancel_dash_download() {
 
     let outcome = backend.run(ctx).await.unwrap();
     assert_eq!(outcome, RunOutcome::Cancelled);
+}
+
+async fn serve(app: Router) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    addr
+}
+
+fn mpd_response(body: String) -> Response {
+    ([(CONTENT_TYPE, "application/dash+xml")], body).into_response()
+}
+
+/// Probes `url` and returns a backend, a stored job and its store.
+async fn prepare(url: &str, dir: &std::path::Path) -> (DashBackend, Job, Store) {
+    let backend = DashBackend::new(reqwest::Client::new(), Some(make_fake_ffmpeg(dir)));
+    let source = Source::Url(url.to_string());
+    let mut job = Job::new(source.clone(), dir.to_path_buf(), JobOptions::default());
+    job.apply_probe(
+        backend
+            .probe(&source, &JobOptions::default())
+            .await
+            .unwrap(),
+    );
+    let store = Store::open_in_memory().unwrap();
+    store.insert_job(&mut job).unwrap();
+    (backend, job, store)
+}
+
+async fn execute(backend: &DashBackend, job: &Job, store: Store) -> RunOutcome {
+    let (_control_handle, control) = ControlToken::new();
+    let (progress, _progress_rx) = ProgressSink::new();
+    backend
+        .run(JobContext {
+            job: job.clone(),
+            control,
+            progress,
+            store,
+            limiter: Limiter::new(Arc::new(TokenBucket::new(0)), None),
+        })
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn dash_number_template_with_root_duration_downloads_all_segments() {
+    let requested = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let seen = requested.clone();
+    let addr = serve(
+        Router::new()
+            .route(
+                "/m.mpd",
+                get(|| async {
+                    // The duration is only on the root element, not on the period.
+                    mpd_response(
+                        r#"<?xml version="1.0"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT8S">
+  <Period>
+    <AdaptationSet contentType="video" mimeType="video/mp4" width="640" height="360">
+      <Representation id="v" bandwidth="1000">
+        <SegmentTemplate media="/s-$Number$.m4s" duration="2" timescale="1" startNumber="1"/>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>"#
+                            .to_string(),
+                    )
+                }),
+            )
+            .route(
+                "/{name}",
+                get(
+                    move |axum::extract::Path(name): axum::extract::Path<String>| {
+                        let seen = seen.clone();
+                        async move {
+                            seen.lock().unwrap().push(name);
+                            Bytes::from(vec![0x5A; 100])
+                        }
+                    },
+                ),
+            ),
+    )
+    .await;
+    let temp_dir = TempDir::new().unwrap();
+    let (backend, job, store) = prepare(&format!("http://{addr}/m.mpd"), temp_dir.path()).await;
+
+    let outcome = execute(&backend, &job, store).await;
+
+    assert_eq!(outcome, RunOutcome::Completed);
+    let mut names = requested.lock().unwrap().clone();
+    names.sort();
+    assert_eq!(names, ["s-1.m4s", "s-2.m4s", "s-3.m4s", "s-4.m4s"]);
+    assert_eq!(std::fs::read(job.target_path()).unwrap().len(), 400);
+}
+
+#[tokio::test]
+async fn dash_segment_base_streams_to_disk() {
+    const TOTAL: usize = 3 * 1024 * 1024;
+    const FIRST: usize = 1024 * 1024;
+    let temp_dir = TempDir::new().unwrap();
+    let video_tmp = Arc::new(std::sync::Mutex::new(PathBuf::new()));
+    let written_early = Arc::new(AtomicBool::new(false));
+
+    // A file server that sends 1 MiB, then waits to see the client write it to
+    // disk before it sends the rest. A client that buffers the whole body
+    // never writes anything in between.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let file_addr = listener.local_addr().unwrap();
+    let (tmp_for_server, early_for_server) = (video_tmp.clone(), written_early.clone());
+    tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let (tmp, early) = (tmp_for_server.clone(), early_for_server.clone());
+            tokio::spawn(async move {
+                let mut request = vec![0_u8; 4096];
+                let _ = socket.read(&mut request).await;
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {TOTAL}\r\nConnection: close\r\n\r\n"
+                );
+                socket.write_all(head.as_bytes()).await.unwrap();
+                socket.write_all(&vec![7_u8; FIRST]).await.unwrap();
+                socket.flush().await.unwrap();
+                let path = tmp.lock().unwrap().clone();
+                for _ in 0..300 {
+                    if std::fs::metadata(&path).is_ok_and(|meta| meta.len() > 0) {
+                        early.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                let _ = socket.write_all(&vec![7_u8; TOTAL - FIRST]).await;
+            });
+        }
+    });
+    let manifest = format!(
+        r#"<?xml version="1.0"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT10S">
+  <Period>
+    <AdaptationSet contentType="video" mimeType="video/mp4" width="640" height="360">
+      <Representation id="v" bandwidth="1000">
+        <BaseURL>http://{file_addr}/big.mp4</BaseURL>
+        <SegmentBase indexRange="0-100"/>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>"#
+    );
+    let addr = serve(Router::new().route(
+        "/m.mpd",
+        get(move || {
+            let manifest = manifest.clone();
+            async move { mpd_response(manifest) }
+        }),
+    ))
+    .await;
+    let (backend, job, store) = prepare(&format!("http://{addr}/m.mpd"), temp_dir.path()).await;
+    let mut tmp_name = job.part_path().into_os_string();
+    tmp_name.push(".v.tmp");
+    *video_tmp.lock().unwrap() = PathBuf::from(tmp_name);
+
+    let outcome = execute(&backend, &job, store).await;
+
+    assert_eq!(outcome, RunOutcome::Completed);
+    assert!(
+        written_early.load(Ordering::SeqCst),
+        "the segment was held in memory instead of being written as it arrived"
+    );
+    assert_eq!(std::fs::read(job.target_path()).unwrap().len(), TOTAL);
+}
+
+#[tokio::test]
+async fn dash_live_manifest_is_rejected() {
+    let addr = serve(Router::new().route(
+        "/live.mpd",
+        get(|| async {
+            mpd_response(
+                r#"<?xml version="1.0"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="dynamic" minimumUpdatePeriod="PT2S">
+  <Period>
+    <AdaptationSet contentType="video" mimeType="video/mp4">
+      <Representation id="v" bandwidth="1000">
+        <SegmentTemplate media="/s-$Number$.m4s" duration="2" timescale="1"/>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>"#
+                    .to_string(),
+            )
+        }),
+    ))
+    .await;
+    let temp_dir = TempDir::new().unwrap();
+    let backend = DashBackend::new(
+        reqwest::Client::new(),
+        Some(make_fake_ffmpeg(temp_dir.path())),
+    );
+
+    let error = backend
+        .probe(
+            &Source::Url(format!("http://{addr}/live.mpd")),
+            &JobOptions::default(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(
+        error.to_string().contains("live streams are not supported"),
+        "got: {error}"
+    );
 }
