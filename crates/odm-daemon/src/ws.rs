@@ -10,7 +10,7 @@ use odm_api::{Event, WsAuthRequest, WsAuthResponse};
 use odm_core::Event as CoreEvent;
 use tokio::sync::broadcast;
 
-use crate::routes::job_to_dto;
+use crate::routes::{job_to_dto, queue_names};
 use crate::state::AppState;
 
 pub async fn ws_handler(
@@ -83,7 +83,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
         let api_event = match core_event {
             CoreEvent::JobAdded(id) => {
                 if let Ok(job) = state.engine.store().get_job(id) {
-                    Event::JobAdded(job_to_dto(&job, state.engine.store()))
+                    Event::JobAdded(job_to_dto(&job, &queue_names(state.engine.store())))
                 } else {
                     continue;
                 }

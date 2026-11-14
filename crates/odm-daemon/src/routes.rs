@@ -1,4 +1,5 @@
 //! REST route handlers for the odm daemon API.
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use axum::Json;
@@ -13,18 +14,26 @@ use odm_api::{
     SegmentDto, SetCategoryRequest, SettingsDto, UpdateQueueRequest, UpdateSettingsRequest,
 };
 use odm_core::grabber::{GrabberConfig, SiteGrabber};
-use odm_core::{Backend, HttpBackend, Job, JobId, JobOptions, Source, Store};
+use odm_core::{Backend, Job, JobId, JobOptions, JobState, Source, Store};
 use odm_media::url::Url;
 use serde::Deserialize;
 
 use crate::state::AppState;
 
-pub fn job_to_dto(job: &Job, store: &Store) -> DownloadItemDto {
-    let queue_name = store
+/// Maps queue ids to queue names, so a list of jobs reads the queues once.
+pub fn queue_names(store: &Store) -> HashMap<i64, String> {
+    store
         .list_queues()
-        .ok()
-        .and_then(|qs| qs.into_iter().find(|q| q.id == job.queue_id()))
-        .map(|q| q.name)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|queue| (queue.id, queue.name))
+        .collect()
+}
+
+pub fn job_to_dto(job: &Job, queue_names: &HashMap<i64, String>) -> DownloadItemDto {
+    let queue_name = queue_names
+        .get(&job.queue_id())
+        .cloned()
         .unwrap_or_else(|| "default".to_string());
 
     let total = job.total_bytes();
@@ -65,7 +74,7 @@ pub fn job_to_dto(job: &Job, store: &Store) -> DownloadItemDto {
 }
 
 pub fn job_to_detail_dto(job: &Job, store: &Store) -> DownloadDetailDto {
-    let item = job_to_dto(job, store);
+    let item = job_to_dto(job, &queue_names(store));
     let backend = item.backend.clone();
     let segments = store
         .list_segments(job.id())
@@ -324,12 +333,16 @@ pub async fn probe_handler(
         }));
     }
 
-    let backend = HttpBackend::new().map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse::new("backend_error", e.to_string())),
-        )
-    })?;
+    // The engine's own HTTP backend keeps one connection pool for every probe.
+    let backend = state
+        .engine
+        .get_backend(odm_core::job::BackendKind::Http)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse::new("backend_error", e.to_string())),
+            )
+        })?;
 
     let opts = JobOptions {
         user_agent: req.user_agent,
@@ -377,9 +390,10 @@ pub async fn list_downloads_handler(
         )
     })?;
 
+    let names = queue_names(store);
     let downloads: Vec<DownloadItemDto> = jobs
         .into_iter()
-        .map(|job| job_to_dto(&job, store))
+        .map(|job| job_to_dto(&job, &names))
         .filter(|dto| {
             if let Some(ref st) = filter.state
                 && &dto.state != st
@@ -641,6 +655,22 @@ pub async fn resume_download_handler(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    restart_download(&state, id, &[JobState::Paused, JobState::Queued])
+}
+
+pub async fn retry_download_handler(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+    restart_download(&state, id, &[JobState::Failed])
+}
+
+/// Starts a job again if it is in one of the `allowed` states, otherwise answers 409.
+fn restart_download(
+    state: &AppState,
+    id: i64,
+    allowed: &[JobState],
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     let store = state.engine.store();
     let job = store.get_job(JobId(id)).map_err(|_| {
         (
@@ -648,6 +678,15 @@ pub async fn resume_download_handler(
             Json(ErrorResponse::new("not_found", "Job not found")),
         )
     })?;
+    if !allowed.contains(&job.state()) {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(ErrorResponse::new(
+                "invalid_state",
+                format!("A {:?} download cannot be restarted this way", job.state()),
+            )),
+        ));
+    }
     let queue = store
         .list_queues()
         .ok()
@@ -677,36 +716,6 @@ pub async fn cancel_download_handler(
             Json(ErrorResponse::new("cancel_failed", e.to_string())),
         )
     })?;
-    Ok(StatusCode::OK)
-}
-
-pub async fn retry_download_handler(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-    let store = state.engine.store();
-    let job = store.get_job(JobId(id)).map_err(|_| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse::new("not_found", "Job not found")),
-        )
-    })?;
-    let queue = store
-        .list_queues()
-        .ok()
-        .and_then(|qs| qs.into_iter().find(|q| q.id == job.queue_id()))
-        .unwrap_or_else(|| {
-            store
-                .queue_by_name("default")
-                .unwrap_or_else(|_| odm_core::Queue {
-                    id: 1,
-                    name: "default".to_string(),
-                    max_concurrent: 3,
-                    schedule: None,
-                })
-        });
-
-    state.spawn_download(JobId(id), &queue.name, queue.max_concurrent);
     Ok(StatusCode::OK)
 }
 

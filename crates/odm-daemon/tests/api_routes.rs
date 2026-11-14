@@ -359,3 +359,92 @@ async fn shutdown_pauses_running_jobs() {
         odm_core::JobState::Paused
     );
 }
+
+/// Adds a job and walks it to `state` through the allowed transitions.
+fn job_in_state(
+    engine: &Engine,
+    dir: &std::path::Path,
+    state: odm_core::JobState,
+) -> odm_core::Job {
+    use odm_core::JobState;
+    let mut job = engine
+        .add(
+            "http://127.0.0.1:9/never.bin",
+            dir.to_path_buf(),
+            odm_core::JobOptions::default(),
+        )
+        .unwrap();
+    let path: &[JobState] = match state {
+        JobState::Queued => &[],
+        JobState::Downloading => &[JobState::Probing, JobState::Downloading],
+        JobState::Completed => &[
+            JobState::Probing,
+            JobState::Downloading,
+            JobState::Completed,
+        ],
+        other => panic!("unsupported state {other:?}"),
+    };
+    for step in path {
+        job.transition_to(*step).unwrap();
+    }
+    engine.store().update_job(&job).unwrap();
+    job
+}
+
+async fn post_to(app: &Router, uri: &str) -> StatusCode {
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header(HOST, "127.0.0.1")
+        .header(AUTHORIZATION, "Bearer secret")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    app.clone().oneshot(req).await.unwrap().status()
+}
+
+fn app_with_engine(dir: &std::path::Path) -> (Router, Engine) {
+    let engine = Engine::new(Store::open(dir.join("odm.sqlite")).unwrap()).unwrap();
+    let state = AppState::new(engine.clone(), DaemonConfig::for_test(dir, "secret"));
+    (build_router_with_state(state), engine)
+}
+
+#[tokio::test]
+async fn cancel_of_queued_job_sends_state_event() {
+    let dir = tempdir().unwrap();
+    let (app, engine) = app_with_engine(dir.path());
+    let job = job_in_state(&engine, dir.path(), odm_core::JobState::Queued);
+    let mut events = engine.subscribe();
+
+    let status = post_to(&app, &format!("/api/v1/downloads/{}/cancel", job.id().0)).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        events.try_recv().unwrap(),
+        odm_core::Event::JobStateChanged {
+            id: job.id(),
+            state: odm_core::JobState::Cancelled,
+        }
+    );
+}
+
+#[tokio::test]
+async fn resume_of_completed_job_is_409() {
+    let dir = tempdir().unwrap();
+    let (app, engine) = app_with_engine(dir.path());
+    let job = job_in_state(&engine, dir.path(), odm_core::JobState::Completed);
+
+    let status = post_to(&app, &format!("/api/v1/downloads/{}/resume", job.id().0)).await;
+
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn retry_of_running_job_is_409() {
+    let dir = tempdir().unwrap();
+    let (app, engine) = app_with_engine(dir.path());
+    let job = job_in_state(&engine, dir.path(), odm_core::JobState::Downloading);
+
+    let status = post_to(&app, &format!("/api/v1/downloads/{}/retry", job.id().0)).await;
+
+    assert_eq!(status, StatusCode::CONFLICT);
+}

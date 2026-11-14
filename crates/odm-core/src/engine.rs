@@ -276,6 +276,10 @@ impl Engine {
             job.transition_to(JobState::Cancelled)?;
             self.store.update_job(&job)?;
             self.discard_partial(&job);
+            let _ = self.events.send(Event::JobStateChanged {
+                id,
+                state: JobState::Cancelled,
+            });
             Ok(())
         }
     }

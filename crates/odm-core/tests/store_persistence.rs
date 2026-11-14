@@ -126,3 +126,29 @@ fn recover_marks_seeding_completed() {
         JobState::Paused
     );
 }
+
+#[test]
+fn delete_queue_moves_jobs_to_default() {
+    let store = Store::open_in_memory().unwrap();
+    let dir = tempdir().unwrap();
+    let default = store.queue_by_name("default").unwrap();
+    let mut resident = sample_job(dir.path());
+    store.insert_job(&mut resident).unwrap();
+    let temporary = store.create_queue("temporary", 2).unwrap();
+    let mut moving = sample_job(dir.path());
+    moving.set_queue_id(temporary.id);
+    store.insert_job(&mut moving).unwrap();
+
+    store.delete_queue("temporary").unwrap();
+
+    let moved = store.get_job(moving.id()).unwrap();
+    assert_eq!(moved.queue_id(), default.id);
+    let order: Vec<JobId> = store
+        .queue_jobs(default.id)
+        .unwrap()
+        .iter()
+        .map(Job::id)
+        .collect();
+    assert_eq!(order, vec![resident.id(), moving.id()]);
+    assert!(store.queue_by_name("temporary").is_err());
+}

@@ -562,16 +562,46 @@ impl Store {
         Ok(())
     }
 
-    /// Deletes a named queue if it is not the default queue.
+    /// Deletes a named queue if it is not the default queue. Its jobs move to
+    /// the end of the default queue, in their old order.
     pub fn delete_queue(&self, name: &str) -> Result<(), StoreError> {
         if name == "default" {
             return Err(StoreError::CannotDeleteDefaultQueue);
         }
-        let connection = self.lock()?;
-        let affected = connection.execute("DELETE FROM queues WHERE name = ?1", params![name])?;
-        if affected == 0 {
-            return Err(StoreError::QueueNotFound(name.to_string()));
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction()?;
+        let queue_id: i64 = transaction
+            .query_row(
+                "SELECT id FROM queues WHERE name = ?1",
+                params![name],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| StoreError::QueueNotFound(name.to_string()))?;
+        let default_id: i64 =
+            transaction.query_row("SELECT id FROM queues WHERE name = 'default'", [], |row| {
+                row.get(0)
+            })?;
+        let last_position: i64 = transaction.query_row(
+            "SELECT COALESCE(MAX(position), 0) FROM jobs WHERE queue_id = ?1",
+            params![default_id],
+            |row| row.get(0),
+        )?;
+        let moving: Vec<i64> = {
+            let mut statement = transaction
+                .prepare("SELECT id FROM jobs WHERE queue_id = ?1 ORDER BY position, id")?;
+            statement
+                .query_map(params![queue_id], |row| row.get(0))?
+                .collect::<Result<_, _>>()?
+        };
+        for (offset, job_id) in moving.iter().enumerate() {
+            transaction.execute(
+                "UPDATE jobs SET queue_id = ?2, position = ?3 WHERE id = ?1",
+                params![job_id, default_id, last_position + 1 + offset as i64],
+            )?;
         }
+        transaction.execute("DELETE FROM queues WHERE id = ?1", params![queue_id])?;
+        transaction.commit()?;
         Ok(())
     }
 
