@@ -6,7 +6,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use odm_core::backend::{Backend, BackendError, JobContext, RunOutcome};
 use odm_core::job::{BackendKind, JobOptions, ProbeResult, Source};
-use reqwest::header::{COOKIE, HeaderMap, HeaderName, HeaderValue, REFERER, USER_AGENT};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use tokio::io::AsyncWriteExt;
 
 use crate::host::PluginHost;
@@ -61,21 +61,16 @@ impl PluginBackend {
     }
 }
 
+/// Applies the job's options, then the headers the plugin resolved for this
+/// download; a plugin header replaces a job header of the same name.
 fn apply_headers(
-    mut req: reqwest::RequestBuilder,
+    req: reqwest::RequestBuilder,
     plugin_headers: &HashMap<String, String>,
     opts: &JobOptions,
 ) -> Result<reqwest::RequestBuilder, BackendError> {
+    let req = odm_core::apply_options(req, opts)?;
+
     let mut map = HeaderMap::new();
-
-    for (k, v) in &opts.headers {
-        let name = HeaderName::from_bytes(k.as_bytes())
-            .map_err(|_| BackendError::InvalidOptions(format!("invalid header name: {k}")))?;
-        let val = HeaderValue::from_str(v)
-            .map_err(|_| BackendError::InvalidOptions(format!("invalid header value for {k}")))?;
-        map.insert(name, val);
-    }
-
     for (k, v) in plugin_headers {
         let name = HeaderName::from_bytes(k.as_bytes())
             .map_err(|_| BackendError::InvalidOptions(format!("invalid header name: {k}")))?;
@@ -83,25 +78,7 @@ fn apply_headers(
             .map_err(|_| BackendError::InvalidOptions(format!("invalid header value for {k}")))?;
         map.insert(name, val);
     }
-
-    if let Some(user_agent) = &opts.user_agent {
-        let val = HeaderValue::from_str(user_agent)
-            .map_err(|_| BackendError::InvalidOptions("invalid user agent".to_string()))?;
-        map.insert(USER_AGENT, val);
-    }
-    if let Some(referer) = &opts.referer {
-        let val = HeaderValue::from_str(referer)
-            .map_err(|_| BackendError::InvalidOptions("invalid referer".to_string()))?;
-        map.insert(REFERER, val);
-    }
-    if let Some(cookies) = &opts.cookies {
-        let val = HeaderValue::from_str(cookies)
-            .map_err(|_| BackendError::InvalidOptions("invalid cookies".to_string()))?;
-        map.insert(COOKIE, val);
-    }
-
-    req = req.headers(map);
-    Ok(req)
+    Ok(req.headers(map))
 }
 
 fn parse_content_disposition_filename(cd: &str) -> Option<String> {

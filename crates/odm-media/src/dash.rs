@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use odm_core::backend::{Backend, BackendError, JobContext, RunOutcome};
 use odm_core::job::{BackendKind, JobOptions, ProbeResult, Source};
-use reqwest::header::{COOKIE, HeaderName, HeaderValue, REFERER, USER_AGENT};
-use reqwest::{Client, RequestBuilder};
+use odm_core::{apply_options, stream_filename};
+use reqwest::Client;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use url::Url;
 
@@ -415,7 +415,7 @@ impl DashBackend {
         downloaded_bytes: &mut u64,
     ) -> Result<(), BackendError> {
         let mut request = self.client.get(seg.url.clone());
-        request = apply_options(request, ctx.job.options());
+        request = apply_options(request, ctx.job.options())?;
         if let Some((start, end)) = seg.byte_range {
             request = request.header("Range", format!("bytes={start}-{end}"));
         }
@@ -452,7 +452,7 @@ impl Backend for DashBackend {
         let url = Url::parse(url_str).map_err(|e| BackendError::InvalidUrl(e.to_string()))?;
 
         let mut req = self.client.get(url.clone());
-        req = apply_options(req, opts);
+        req = apply_options(req, opts)?;
         let res = req.send().await?.error_for_status()?;
         let bytes = res.bytes().await?;
         let text = String::from_utf8_lossy(&bytes);
@@ -475,7 +475,7 @@ impl Backend for DashBackend {
         }
         reject_live(mpd.mpdtype.as_deref())?;
 
-        let filename = derive_filename(&url, "mp4");
+        let filename = stream_filename(&url, ".mpd", "mp4", &[".mp4"]);
 
         Ok(ProbeResult {
             backend: BackendKind::Dash,
@@ -509,7 +509,7 @@ impl Backend for DashBackend {
         let base_url = Url::parse(url_str).map_err(|e| BackendError::InvalidUrl(e.to_string()))?;
 
         let mut req = self.client.get(base_url.clone());
-        req = apply_options(req, ctx.job.options());
+        req = apply_options(req, ctx.job.options())?;
         let res = req.send().await?.error_for_status()?;
         let bytes = res.bytes().await?;
         let text = String::from_utf8_lossy(&bytes);
@@ -802,27 +802,6 @@ fn reject_live(mpd_type: Option<&str>) -> Result<(), BackendError> {
     Ok(())
 }
 
-fn apply_options(mut builder: RequestBuilder, opts: &JobOptions) -> RequestBuilder {
-    if let Some(ref ua) = opts.user_agent {
-        builder = builder.header(USER_AGENT, ua);
-    }
-    if let Some(ref ref_url) = opts.referer {
-        builder = builder.header(REFERER, ref_url);
-    }
-    if let Some(ref cookies) = opts.cookies {
-        builder = builder.header(COOKIE, cookies);
-    }
-    for (name, value) in &opts.headers {
-        if let (Ok(hname), Ok(hval)) = (
-            HeaderName::from_bytes(name.as_bytes()),
-            HeaderValue::from_str(value),
-        ) {
-            builder = builder.header(hname, hval);
-        }
-    }
-    builder
-}
-
 fn is_drm_protected(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     lower.contains("edef8ba9-79d6-4ace-a3c8-27dcd51d21ed")
@@ -899,33 +878,4 @@ fn resolve_template(
     }
 
     result.replace("$$", "$")
-}
-
-fn derive_filename(url: &Url, default_ext: &str) -> String {
-    let raw = url
-        .path_segments()
-        .and_then(|mut s| s.next_back())
-        .filter(|s| !s.is_empty())
-        .unwrap_or("stream");
-
-    let stem = if let Some(stripped) = raw.strip_suffix(".mpd") {
-        if stripped.is_empty() {
-            "stream"
-        } else {
-            stripped
-        }
-    } else {
-        raw
-    };
-
-    let cleaned = sanitize_filename(stem);
-    if cleaned.ends_with(".mp4") {
-        cleaned
-    } else {
-        format!("{cleaned}.{default_ext}")
-    }
-}
-
-fn sanitize_filename(candidate: &str) -> String {
-    odm_core::sanitize_filename(candidate).unwrap_or_else(|| "stream".to_string())
 }

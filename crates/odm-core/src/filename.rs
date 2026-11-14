@@ -45,6 +45,34 @@ fn is_reserved_device_name(name: &str) -> bool {
         })
 }
 
+/// Names the file saved from a manifest URL: the last path segment without
+/// `manifest_ext`, plus `default_ext` unless the name already ends in one of `keep_exts`.
+pub fn stream_filename(
+    url: &url::Url,
+    manifest_ext: &str,
+    default_ext: &str,
+    keep_exts: &[&str],
+) -> String {
+    let raw = url
+        .path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .filter(|segment| !segment.is_empty())
+        .unwrap_or("stream");
+
+    let stem = match raw.strip_suffix(manifest_ext) {
+        Some("") => "stream",
+        Some(stripped) => stripped,
+        None => raw,
+    };
+
+    let cleaned = sanitize_filename(stem).unwrap_or_else(|| "stream".to_string());
+    if keep_exts.iter().any(|ext| cleaned.ends_with(ext)) {
+        cleaned
+    } else {
+        format!("{cleaned}.{default_ext}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

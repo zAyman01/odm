@@ -219,8 +219,7 @@ pub fn build_router_with_state(state: AppState) -> Router {
 pub fn build_router(config: DaemonConfig) -> Result<Router, Box<dyn std::error::Error>> {
     let store = Store::open_in_memory()?;
     let engine = Engine::new(store.clone())?;
-    let (plugins, _) = init_plugin_backend(&config.data_dir, &engine);
-    let mut state = AppState::new(engine.clone(), config).with_plugins(plugins);
+    let mut state = AppState::new(engine.clone(), config);
     let (hls, dash, ytdlp) = init_media_backends(&store, &engine);
     if let Some(h) = hls {
         state = state.with_hls(h);

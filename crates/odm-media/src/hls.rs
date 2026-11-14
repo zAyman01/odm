@@ -8,8 +8,8 @@ use aes::cipher::{BlockModeDecrypt, KeyIvInit, block_padding::Pkcs7};
 use async_trait::async_trait;
 use odm_core::backend::{Backend, BackendError, JobContext, RunOutcome};
 use odm_core::job::{BackendKind, JobOptions, ProbeResult, Source};
-use reqwest::header::{COOKIE, HeaderName, HeaderValue, REFERER, USER_AGENT};
-use reqwest::{Client, RequestBuilder};
+use odm_core::{apply_options, stream_filename};
+use reqwest::Client;
 use tokio::io::AsyncWriteExt;
 use url::Url;
 
@@ -138,7 +138,7 @@ impl HlsBackend {
         let url = media_url
             .join(&map.uri)
             .map_err(|e| BackendError::InvalidUrl(e.to_string()))?;
-        let mut request = apply_options(self.client.get(url), ctx.job.options());
+        let mut request = apply_options(self.client.get(url), ctx.job.options())?;
         if let Some(range) = &map.byte_range {
             let start = range.offset.unwrap_or(0);
             let end = start.saturating_add(range.length).saturating_sub(1);
@@ -169,7 +169,7 @@ impl Backend for HlsBackend {
         let url = Url::parse(url_str).map_err(|e| BackendError::InvalidUrl(e.to_string()))?;
 
         let mut req = self.client.get(url.clone());
-        req = apply_options(req, opts);
+        req = apply_options(req, opts)?;
         let res = req.send().await?.error_for_status()?;
         let bytes = res.bytes().await?;
         let text = String::from_utf8_lossy(&bytes);
@@ -191,7 +191,7 @@ impl Backend for HlsBackend {
 
         match playlist {
             m3u8_rs::Playlist::MasterPlaylist(_) => {
-                let filename = derive_filename(&url, default_ext);
+                let filename = stream_filename(&url, ".m3u8", default_ext, &[".ts", ".mp4"]);
                 Ok(ProbeResult {
                     backend: BackendKind::Hls,
                     filename,
@@ -208,7 +208,7 @@ impl Backend for HlsBackend {
                         "live streams are not supported".to_string(),
                     ));
                 }
-                let filename = derive_filename(&url, default_ext);
+                let filename = stream_filename(&url, ".m3u8", default_ext, &[".ts", ".mp4"]);
                 let total_bytes = estimate_media_size(&self.client, &url, &media.segments).await;
                 Ok(ProbeResult {
                     backend: BackendKind::Hls,
@@ -235,7 +235,7 @@ impl Backend for HlsBackend {
         let base_url = Url::parse(url_str).map_err(|e| BackendError::InvalidUrl(e.to_string()))?;
 
         let mut req = self.client.get(base_url.clone());
-        req = apply_options(req, ctx.job.options());
+        req = apply_options(req, ctx.job.options())?;
         let res = req.send().await?.error_for_status()?;
         let bytes = res.bytes().await?;
         let text = String::from_utf8_lossy(&bytes);
@@ -270,7 +270,7 @@ impl Backend for HlsBackend {
                     .map_err(|e| BackendError::InvalidUrl(e.to_string()))?;
 
                 let mut v_req = self.client.get(variant_url.clone());
-                v_req = apply_options(v_req, ctx.job.options());
+                v_req = apply_options(v_req, ctx.job.options())?;
                 let v_res = v_req.send().await?.error_for_status()?;
                 let v_bytes = v_res.bytes().await?;
                 let v_text = String::from_utf8_lossy(&v_bytes);
@@ -389,7 +389,7 @@ impl Backend for HlsBackend {
                 .map_err(|e| BackendError::InvalidUrl(e.to_string()))?;
 
             let mut seg_req = self.client.get(seg_url);
-            seg_req = apply_options(seg_req, ctx.job.options());
+            seg_req = apply_options(seg_req, ctx.job.options())?;
             if let Some(ref range) = seg.byte_range {
                 let start = range.offset.unwrap_or(0);
                 let end = start.saturating_add(range.length).saturating_sub(1);
@@ -416,7 +416,7 @@ impl Backend for HlsBackend {
                             *cached
                         } else {
                             let mut key_req = self.client.get(key_url.clone());
-                            key_req = apply_options(key_req, ctx.job.options());
+                            key_req = apply_options(key_req, ctx.job.options())?;
                             let key_res = key_req.send().await.map_err(|e| {
                                 BackendError::Media(format!("failed to fetch encryption key: {e}"))
                             })?;
@@ -525,27 +525,6 @@ async fn estimate_media_size(
     Some(cl.saturating_mul(segments.len() as u64))
 }
 
-fn apply_options(mut builder: RequestBuilder, opts: &JobOptions) -> RequestBuilder {
-    if let Some(ref ua) = opts.user_agent {
-        builder = builder.header(USER_AGENT, ua);
-    }
-    if let Some(ref ref_url) = opts.referer {
-        builder = builder.header(REFERER, ref_url);
-    }
-    if let Some(ref cookies) = opts.cookies {
-        builder = builder.header(COOKIE, cookies);
-    }
-    for (name, value) in &opts.headers {
-        if let (Ok(hname), Ok(hval)) = (
-            HeaderName::from_bytes(name.as_bytes()),
-            HeaderValue::from_str(value),
-        ) {
-            builder = builder.header(hname, hval);
-        }
-    }
-    builder
-}
-
 fn is_drm_protected(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     if text.contains("METHOD=SAMPLE-AES") || text.contains("METHOD=\"SAMPLE-AES\"") {
@@ -597,33 +576,4 @@ fn select_variant<'a>(
         }
     }
     variants.iter().max_by_key(|v| v.bandwidth)
-}
-
-fn derive_filename(url: &Url, default_ext: &str) -> String {
-    let raw = url
-        .path_segments()
-        .and_then(|mut s| s.next_back())
-        .filter(|s| !s.is_empty())
-        .unwrap_or("stream");
-
-    let stem = if let Some(stripped) = raw.strip_suffix(".m3u8") {
-        if stripped.is_empty() {
-            "stream"
-        } else {
-            stripped
-        }
-    } else {
-        raw
-    };
-
-    let cleaned = sanitize_filename(stem);
-    if cleaned.ends_with(".ts") || cleaned.ends_with(".mp4") {
-        cleaned
-    } else {
-        format!("{cleaned}.{default_ext}")
-    }
-}
-
-fn sanitize_filename(candidate: &str) -> String {
-    odm_core::sanitize_filename(candidate).unwrap_or_else(|| "stream".to_string())
 }

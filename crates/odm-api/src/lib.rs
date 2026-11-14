@@ -26,7 +26,5 @@ pub use grabber::{GrabbedFileDto, GrabberRequest, GrabberResponse};
 pub use health::HealthResponse;
 pub use plugin::{PluginDto, PluginListResponse};
 pub use probe::{ProbeRequest, ProbeResponse, QualityDto, TorrentFileDto};
-pub use queue::{
-    CreateQueueRequest, ListQueuesResponse, QueueDto, QueueScheduleDto, UpdateQueueRequest,
-};
+pub use queue::{CreateQueueRequest, ListQueuesResponse, QueueDto, UpdateQueueRequest};
 pub use settings::{SettingsDto, UpdateSettingsRequest};

@@ -2,14 +2,6 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct QueueScheduleDto {
-    pub start_time: String,
-    pub stop_time: Option<String>,
-    #[serde(default)]
-    pub days: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct QueueDto {
     pub id: i64,
     pub name: String,

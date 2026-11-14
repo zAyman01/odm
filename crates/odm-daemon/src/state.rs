@@ -7,7 +7,7 @@ use odm_media::dash::DashBackend;
 use odm_media::hls::HlsBackend;
 use odm_media::reqwest::Client;
 use odm_media::ytdlp::YtDlpBackend;
-use odm_plugin::{PluginBackend, PluginRegistry};
+use odm_plugin::PluginRegistry;
 use odm_torrent::TorrentBackend;
 use tokio::sync::{RwLock, Semaphore};
 
@@ -38,13 +38,7 @@ struct QueueSlots {
 
 impl AppState {
     pub fn new(engine: Engine, config: DaemonConfig) -> Self {
-        let plugins_dir = config.data_dir.join("plugins");
-        let _ = std::fs::create_dir_all(&plugins_dir);
-        let mut registry = PluginRegistry::new(plugins_dir);
-        let _ = registry.discover();
-        let plugins = Arc::new(RwLock::new(registry));
-        let plugin_backend = Arc::new(PluginBackend::new(plugins.clone()));
-        engine.register_backend(plugin_backend);
+        let (plugins, _) = crate::server::init_plugin_backend(&config.data_dir, &engine);
 
         let http_client = Client::builder()
             .user_agent(concat!("odm/", env!("CARGO_PKG_VERSION")))
@@ -78,11 +72,6 @@ impl AppState {
     /// Replaces the clock that decides whether a scheduled queue is open (for tests).
     pub fn with_clock(mut self, clock: Arc<dyn odm_core::schedule::Clock>) -> Self {
         self.clock = clock;
-        self
-    }
-
-    pub fn with_plugins(mut self, plugins: Arc<RwLock<PluginRegistry>>) -> Self {
-        self.plugins = plugins;
         self
     }
 

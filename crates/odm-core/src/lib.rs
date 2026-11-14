@@ -29,9 +29,9 @@ pub use category::Category;
 pub use checksum::{Checksum, ChecksumAlgorithm, ChecksumError, verify_file_checksum};
 pub use engine::{AddOverrides, Engine, EngineError};
 pub use event::Event;
-pub use filename::sanitize_filename;
+pub use filename::{sanitize_filename, stream_filename};
 pub use grabber::{GrabResult, GrabbedFile, GrabberConfig, GrabberError, RobotsTxt, SiteGrabber};
-pub use http::HttpBackend;
+pub use http::{HttpBackend, apply_options};
 pub use job::{
     BackendKind, Job, JobErrorInfo, JobId, JobOptions, JobState, ProbeResult, Source,
     TransitionError,

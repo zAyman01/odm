@@ -20,6 +20,31 @@ use serde::Deserialize;
 
 use crate::state::AppState;
 
+/// What a failing handler returns: a status and the JSON error body.
+type ApiError = (StatusCode, Json<ErrorResponse>);
+
+fn api_error(status: StatusCode, code: &str, message: impl Into<String>) -> ApiError {
+    (status, Json(ErrorResponse::new(code, message)))
+}
+
+/// The queue called `name`. A missing queue is created; if that fails too,
+/// the job goes to the default queue.
+fn queue_for(store: &Store, name: &str) -> Result<odm_core::Queue, ApiError> {
+    if let Ok(queue) = store.queue_by_name(name) {
+        return Ok(queue);
+    }
+    if let Ok(queue) = store.create_queue(name, 3) {
+        return Ok(queue);
+    }
+    store.queue_by_name("default").map_err(|e| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "queue_error",
+            e.to_string(),
+        )
+    })
+}
+
 /// Maps queue ids to queue names, so a list of jobs reads the queues once.
 pub fn queue_names(store: &Store) -> HashMap<i64, String> {
     store
@@ -132,15 +157,13 @@ pub async fn health_handler() -> impl IntoResponse {
 pub async fn probe_handler(
     State(state): State<AppState>,
     Json(req): Json<ProbeRequest>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<impl IntoResponse, ApiError> {
     if req.url.starts_with("magnet:") || req.url.ends_with(".torrent") {
         let torrent = state.torrent.as_ref().ok_or_else(|| {
-            (
+            api_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse::new(
-                    "torrent_disabled",
-                    "Torrent backend is not configured",
-                )),
+                "torrent_disabled",
+                "Torrent backend is not configured",
             )
         })?;
 
@@ -153,12 +176,7 @@ pub async fn probe_handler(
         let probe = torrent
             .probe(&source, &JobOptions::default())
             .await
-            .map_err(|e| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    Json(ErrorResponse::new("probe_failed", e.to_string())),
-                )
-            })?;
+            .map_err(|e| api_error(StatusCode::BAD_REQUEST, "probe_failed", e.to_string()))?;
 
         let files = torrent.probe_torrent_files(&source).await.ok();
         let torrent_files = files.map(|fs| {
@@ -193,9 +211,10 @@ pub async fn probe_handler(
             .engine
             .get_backend(odm_core::job::BackendKind::Plugin)
             .map_err(|e| {
-                (
+                api_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse::new("backend_error", e.to_string())),
+                    "backend_error",
+                    e.to_string(),
                 )
             })?;
 
@@ -205,12 +224,10 @@ pub async fn probe_handler(
             ..Default::default()
         };
 
-        let probe = plugin.probe(&source, &opts).await.map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse::new("probe_failed", e.to_string())),
-            )
-        })?;
+        let probe = plugin
+            .probe(&source, &opts)
+            .await
+            .map_err(|e| api_error(StatusCode::BAD_REQUEST, "probe_failed", e.to_string()))?;
 
         return Ok(Json(ProbeResponse {
             backend: "plugin".to_string(),
@@ -239,12 +256,10 @@ pub async fn probe_handler(
 
     if is_m3u8 {
         let hls = state.hls.as_ref().ok_or_else(|| {
-            (
+            api_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse::new(
-                    "hls_disabled",
-                    "HLS backend is not configured",
-                )),
+                "hls_disabled",
+                "HLS backend is not configured",
             )
         })?;
 
@@ -254,12 +269,10 @@ pub async fn probe_handler(
             ..Default::default()
         };
 
-        let probe = hls.probe(&source, &opts).await.map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse::new("probe_failed", e.to_string())),
-            )
-        })?;
+        let probe = hls
+            .probe(&source, &opts)
+            .await
+            .map_err(|e| api_error(StatusCode::BAD_REQUEST, "probe_failed", e.to_string()))?;
 
         let qualities = hls.probe_qualities(&source).await.ok().map(|qs| {
             qs.into_iter()
@@ -287,12 +300,10 @@ pub async fn probe_handler(
 
     if is_mpd {
         let dash = state.dash.as_ref().ok_or_else(|| {
-            (
+            api_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse::new(
-                    "dash_disabled",
-                    "DASH backend is not configured",
-                )),
+                "dash_disabled",
+                "DASH backend is not configured",
             )
         })?;
 
@@ -302,12 +313,10 @@ pub async fn probe_handler(
             ..Default::default()
         };
 
-        let probe = dash.probe(&source, &opts).await.map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse::new("probe_failed", e.to_string())),
-            )
-        })?;
+        let probe = dash
+            .probe(&source, &opts)
+            .await
+            .map_err(|e| api_error(StatusCode::BAD_REQUEST, "probe_failed", e.to_string()))?;
 
         let qualities = dash.probe_qualities(&source).await.ok().map(|qs| {
             qs.into_iter()
@@ -338,9 +347,10 @@ pub async fn probe_handler(
         .engine
         .get_backend(odm_core::job::BackendKind::Http)
         .map_err(|e| {
-            (
+            api_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse::new("backend_error", e.to_string())),
+                "backend_error",
+                e.to_string(),
             )
         })?;
 
@@ -352,12 +362,7 @@ pub async fn probe_handler(
     let probe = backend
         .probe(&Source::Url(req.url), &opts)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse::new("probe_failed", e.to_string())),
-            )
-        })?;
+        .map_err(|e| api_error(StatusCode::BAD_REQUEST, "probe_failed", e.to_string()))?;
 
     Ok(Json(ProbeResponse {
         backend: "http".to_string(),
@@ -381,12 +386,13 @@ pub struct ListFilter {
 pub async fn list_downloads_handler(
     State(state): State<AppState>,
     Query(filter): Query<ListFilter>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<impl IntoResponse, ApiError> {
     let store = state.engine.store();
     let jobs = store.list_jobs().map_err(|e| {
-        (
+        api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse::new("store_error", e.to_string())),
+            "store_error",
+            e.to_string(),
         )
     })?;
 
@@ -420,28 +426,24 @@ pub async fn list_downloads_handler(
 pub async fn add_download_handler(
     State(state): State<AppState>,
     Json(req): Json<AddDownloadRequest>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<impl IntoResponse, ApiError> {
     let store = state.engine.store();
 
     let forced_backend = match req.backend.as_deref() {
         None => None,
         Some("ytdlp") if state.ytdlp.is_some() => Some(odm_core::job::BackendKind::YtDlp),
         Some("ytdlp") => {
-            return Err((
+            return Err(api_error(
                 StatusCode::BAD_REQUEST,
-                Json(ErrorResponse::new(
-                    "backend_unavailable",
-                    "yt-dlp was not found; install it or set ytdlp_path in the settings",
-                )),
+                "backend_unavailable",
+                "yt-dlp was not found; install it or set ytdlp_path in the settings",
             ));
         }
         Some(other) => {
-            return Err((
+            return Err(api_error(
                 StatusCode::BAD_REQUEST,
-                Json(ErrorResponse::new(
-                    "unknown_backend",
-                    format!("unknown backend '{other}'"),
-                )),
+                "unknown_backend",
+                format!("unknown backend '{other}'"),
             ));
         }
     };
@@ -569,18 +571,7 @@ pub async fn add_download_handler(
     }
 
     let queue_name = req.queue.unwrap_or_else(|| "default".to_string());
-    let queue = match store.queue_by_name(&queue_name) {
-        Ok(q) => q,
-        Err(_) => match store.create_queue(&queue_name, 3) {
-            Ok(q) => q,
-            Err(_) => store.queue_by_name("default").map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse::new("queue_error", e.to_string())),
-                )
-            })?,
-        },
-    };
+    let queue = queue_for(store, &queue_name)?;
 
     let is_web_url = req.url.starts_with("http://") || req.url.starts_with("https://");
     let source = if forced_backend.is_some() || is_web_url {
@@ -610,12 +601,7 @@ pub async fn add_download_handler(
     let job = state
         .engine
         .add_download_with(source, target_dir, options, overrides)
-        .map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse::new("add_failed", e.to_string())),
-            )
-        })?;
+        .map_err(|e| api_error(StatusCode::BAD_REQUEST, "add_failed", e.to_string()))?;
 
     let id = job.id();
     state.spawn_download(id, &queue.name, queue.max_concurrent);
@@ -626,14 +612,11 @@ pub async fn add_download_handler(
 pub async fn get_download_handler(
     State(state): State<AppState>,
     Path(id): Path<i64>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<impl IntoResponse, ApiError> {
     let store = state.engine.store();
-    let job = store.get_job(JobId(id)).map_err(|_| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse::new("not_found", "Job not found")),
-        )
-    })?;
+    let job = store
+        .get_job(JobId(id))
+        .map_err(|_| api_error(StatusCode::NOT_FOUND, "not_found", "Job not found"))?;
 
     Ok(Json(job_to_detail_dto(&job, store)))
 }
@@ -641,27 +624,25 @@ pub async fn get_download_handler(
 pub async fn pause_download_handler(
     State(state): State<AppState>,
     Path(id): Path<i64>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-    state.engine.pause(JobId(id)).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse::new("pause_failed", e.to_string())),
-        )
-    })?;
+) -> Result<impl IntoResponse, ApiError> {
+    state
+        .engine
+        .pause(JobId(id))
+        .map_err(|e| api_error(StatusCode::BAD_REQUEST, "pause_failed", e.to_string()))?;
     Ok(StatusCode::OK)
 }
 
 pub async fn resume_download_handler(
     State(state): State<AppState>,
     Path(id): Path<i64>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<impl IntoResponse, ApiError> {
     restart_download(&state, id, &[JobState::Paused, JobState::Queued])
 }
 
 pub async fn retry_download_handler(
     State(state): State<AppState>,
     Path(id): Path<i64>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<impl IntoResponse, ApiError> {
     restart_download(&state, id, &[JobState::Failed])
 }
 
@@ -670,21 +651,16 @@ fn restart_download(
     state: &AppState,
     id: i64,
     allowed: &[JobState],
-) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<StatusCode, ApiError> {
     let store = state.engine.store();
-    let job = store.get_job(JobId(id)).map_err(|_| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse::new("not_found", "Job not found")),
-        )
-    })?;
+    let job = store
+        .get_job(JobId(id))
+        .map_err(|_| api_error(StatusCode::NOT_FOUND, "not_found", "Job not found"))?;
     if !allowed.contains(&job.state()) {
-        return Err((
+        return Err(api_error(
             StatusCode::CONFLICT,
-            Json(ErrorResponse::new(
-                "invalid_state",
-                format!("A {:?} download cannot be restarted this way", job.state()),
-            )),
+            "invalid_state",
+            format!("A {:?} download cannot be restarted this way", job.state()),
         ));
     }
     let queue = store
@@ -709,13 +685,11 @@ fn restart_download(
 pub async fn cancel_download_handler(
     State(state): State<AppState>,
     Path(id): Path<i64>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-    state.engine.cancel(JobId(id)).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse::new("cancel_failed", e.to_string())),
-        )
-    })?;
+) -> Result<impl IntoResponse, ApiError> {
+    state
+        .engine
+        .cancel(JobId(id))
+        .map_err(|e| api_error(StatusCode::BAD_REQUEST, "cancel_failed", e.to_string()))?;
     Ok(StatusCode::OK)
 }
 
@@ -729,17 +703,12 @@ pub async fn delete_download_handler(
     State(state): State<AppState>,
     Path(id): Path<i64>,
     Query(query): Query<DeleteQuery>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<impl IntoResponse, ApiError> {
     state
         .engine
         .remove(JobId(id), query.delete_file)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse::new("remove_failed", e.to_string())),
-            )
-        })?;
+        .map_err(|e| api_error(StatusCode::BAD_REQUEST, "remove_failed", e.to_string()))?;
     Ok(StatusCode::OK)
 }
 
@@ -756,11 +725,12 @@ fn queue_to_dto(q: odm_core::Queue) -> QueueDto {
 
 pub async fn list_queues_handler(
     State(state): State<AppState>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<impl IntoResponse, ApiError> {
     let queues = state.engine.store().list_queues().map_err(|e| {
-        (
+        api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse::new("store_error", e.to_string())),
+            "store_error",
+            e.to_string(),
         )
     })?;
 
@@ -772,7 +742,7 @@ pub async fn list_queues_handler(
 pub async fn create_queue_handler(
     State(state): State<AppState>,
     Json(req): Json<CreateQueueRequest>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<impl IntoResponse, ApiError> {
     let sched = req.schedule_start.map(|start| {
         odm_core::schedule::QueueSchedule::new(
             start,
@@ -785,9 +755,10 @@ pub async fn create_queue_handler(
         .store()
         .create_queue_with_schedule(&req.name, req.max_concurrent, sched.as_ref())
         .map_err(|e| {
-            (
+            api_error(
                 StatusCode::BAD_REQUEST,
-                Json(ErrorResponse::new("create_queue_failed", e.to_string())),
+                "create_queue_failed",
+                e.to_string(),
             )
         })?;
 
@@ -798,7 +769,7 @@ pub async fn update_queue_handler(
     State(state): State<AppState>,
     Path(name): Path<String>,
     Json(req): Json<UpdateQueueRequest>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<impl IntoResponse, ApiError> {
     let store = state.engine.store();
     let sched_opt = if req.schedule_start.is_some() {
         Some(req.schedule_start.map(|start| {
@@ -815,9 +786,10 @@ pub async fn update_queue_handler(
     let updated = store
         .update_queue_schedule(&name, Some(req.max_concurrent), sched_opt)
         .map_err(|e| {
-            (
+            api_error(
                 StatusCode::BAD_REQUEST,
-                Json(ErrorResponse::new("update_queue_failed", e.to_string())),
+                "update_queue_failed",
+                e.to_string(),
             )
         })?;
     state.set_queue_limit(&name, updated.max_concurrent);
@@ -829,11 +801,12 @@ pub async fn update_queue_handler(
 pub async fn delete_queue_handler(
     State(state): State<AppState>,
     Path(name): Path<String>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<impl IntoResponse, ApiError> {
     state.engine.store().delete_queue(&name).map_err(|e| {
-        (
+        api_error(
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse::new("delete_queue_failed", e.to_string())),
+            "delete_queue_failed",
+            e.to_string(),
         )
     })?;
     state.engine.announce_queue_changed(&name);
@@ -849,20 +822,20 @@ pub async fn set_position_handler(
     State(state): State<AppState>,
     Path(id): Path<i64>,
     Json(req): Json<PositionRequest>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-    state.engine.store().get_job(JobId(id)).map_err(|_| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse::new("not_found", "Job not found")),
-        )
-    })?;
+) -> Result<impl IntoResponse, ApiError> {
+    state
+        .engine
+        .store()
+        .get_job(JobId(id))
+        .map_err(|_| api_error(StatusCode::NOT_FOUND, "not_found", "Job not found"))?;
     state
         .engine
         .set_job_position(JobId(id), req.position)
         .map_err(|e| {
-            (
+            api_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse::new("position_failed", e.to_string())),
+                "position_failed",
+                e.to_string(),
             )
         })?;
     Ok(StatusCode::OK)
@@ -870,7 +843,7 @@ pub async fn set_position_handler(
 
 pub async fn get_settings_handler(
     State(state): State<AppState>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<impl IntoResponse, ApiError> {
     let store = state.engine.store();
     let download_dir = store.get_setting("download_dir").ok().flatten();
     let default_segments = store
@@ -935,7 +908,7 @@ pub async fn get_settings_handler(
 pub async fn update_settings_handler(
     State(state): State<AppState>,
     Json(req): Json<UpdateSettingsRequest>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<impl IntoResponse, ApiError> {
     let store = state.engine.store();
     if let Some(ref dir) = req.download_dir {
         let _ = store.set_setting("download_dir", dir);
@@ -972,11 +945,12 @@ pub async fn update_settings_handler(
 
 pub async fn list_categories_handler(
     State(state): State<AppState>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<impl IntoResponse, ApiError> {
     let categories = state.engine.store().list_categories().map_err(|e| {
-        (
+        api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse::new("store_error", e.to_string())),
+            "store_error",
+            e.to_string(),
         )
     })?;
 
@@ -996,15 +970,16 @@ pub async fn set_category_handler(
     State(state): State<AppState>,
     Path(name): Path<String>,
     Json(req): Json<SetCategoryRequest>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<impl IntoResponse, ApiError> {
     let cat = state
         .engine
         .store()
         .set_category(&name, req.directory.as_deref(), req.extensions.as_deref())
         .map_err(|e| {
-            (
+            api_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse::new("store_error", e.to_string())),
+                "store_error",
+                e.to_string(),
             )
         })?;
 
@@ -1018,11 +993,12 @@ pub async fn set_category_handler(
 pub async fn delete_category_handler(
     State(state): State<AppState>,
     Path(name): Path<String>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<impl IntoResponse, ApiError> {
     state.engine.store().delete_category(&name).map_err(|e| {
-        (
+        api_error(
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse::new("delete_category_failed", e.to_string())),
+            "delete_category_failed",
+            e.to_string(),
         )
     })?;
 
@@ -1031,7 +1007,7 @@ pub async fn delete_category_handler(
 
 pub async fn get_plugins_handler(
     State(state): State<AppState>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<impl IntoResponse, ApiError> {
     let plugins = state.plugins.read().await.list();
     let dtos: Vec<PluginDto> = plugins
         .into_iter()
@@ -1051,14 +1027,12 @@ pub async fn get_plugins_handler(
 pub async fn grabber_handler(
     State(state): State<AppState>,
     Json(req): Json<GrabberRequest>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<impl IntoResponse, ApiError> {
     let start_url = Url::parse(&req.url).map_err(|e| {
-        (
+        api_error(
             StatusCode::BAD_REQUEST,
-            Json(ErrorResponse::new(
-                "bad_request",
-                format!("invalid start url: {e}"),
-            )),
+            "bad_request",
+            format!("invalid start url: {e}"),
         )
     })?;
 
@@ -1072,12 +1046,10 @@ pub async fn grabber_handler(
     };
 
     let grabber = SiteGrabber::new(config);
-    let result = grabber.crawl(&state.http_client).await.map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse::new("grabber_failed", e.to_string())),
-        )
-    })?;
+    let result = grabber
+        .crawl(&state.http_client)
+        .await
+        .map_err(|e| api_error(StatusCode::BAD_REQUEST, "grabber_failed", e.to_string()))?;
 
     let files = result
         .files

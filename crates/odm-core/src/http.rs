@@ -940,7 +940,9 @@ fn parse_url(source: &Source) -> Result<Url, BackendError> {
     Url::parse(raw).map_err(|error| BackendError::InvalidUrl(error.to_string()))
 }
 
-fn apply_options(
+/// Adds the job's headers, user agent, referer and cookies to `request`. Every
+/// backend that talks HTTP uses this, so a bad header fails the same way in all.
+pub fn apply_options(
     mut request: RequestBuilder,
     opts: &JobOptions,
 ) -> Result<RequestBuilder, BackendError> {
