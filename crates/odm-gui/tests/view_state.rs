@@ -123,3 +123,22 @@ fn add_dialog_open_and_probe_lifecycle() {
     state.close_add_dialog();
     assert!(!state.add_dialog.open);
 }
+
+#[test]
+fn active_filter_uses_real_states() {
+    let mut state = ViewState {
+        downloads: vec![
+            sample_item(1, "downloading", "default"),
+            sample_item(2, "probing", "default"),
+            sample_item(3, "verifying", "default"),
+            sample_item(4, "paused", "default"),
+            sample_item(5, "completed", "default"),
+        ],
+        ..Default::default()
+    };
+
+    state.filter = Filter::Active;
+    let ids: Vec<i64> = state.filtered_downloads().iter().map(|d| d.id).collect();
+
+    assert_eq!(ids, vec![1, 2, 3]);
+}

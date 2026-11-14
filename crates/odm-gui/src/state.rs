@@ -554,12 +554,10 @@ impl ViewState {
             .iter()
             .filter(|item| match self.filter {
                 Filter::All => true,
-                Filter::Active => {
-                    item.state == "downloading"
-                        || item.state == "connecting"
-                        || item.state == "pending"
-                        || item.state == "seeding"
-                }
+                Filter::Active => matches!(
+                    item.state.as_str(),
+                    "downloading" | "probing" | "verifying" | "seeding"
+                ),
                 Filter::Completed => item.state == "completed",
                 Filter::Torrents => item.backend.as_deref() == Some("torrent"),
                 Filter::Queue(ref q) => &item.queue == q,
