@@ -25,7 +25,12 @@ use crate::segment::Segment;
 const DEFAULT_SEGMENTS: u32 = 8;
 const MAX_SEGMENTS: u32 = 32;
 const MIN_SEGMENT_BYTES: u64 = 1024 * 1024;
+/// Waits before each retry of a failed request; the list length is the retry limit.
 const RETRY_DELAYS_SECS: [u64; 5] = [1, 2, 4, 8, 16];
+/// How long connecting to a server may take.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long a server may stay silent before the transfer counts as stalled.
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SegmentWork {
@@ -175,13 +180,46 @@ fn segments_cover(segments: &[SegmentWork], size: u64) -> bool {
 #[derive(Clone)]
 pub struct HttpBackend {
     client: Client,
+    retry_delays: Arc<[Duration]>,
 }
 
 impl HttpBackend {
     pub fn new() -> Result<Self, BackendError> {
+        Self::with_timeouts(CONNECT_TIMEOUT, READ_TIMEOUT)
+    }
+
+    /// Creates a backend with its own connect and read timeouts.
+    pub fn with_timeouts(connect: Duration, read: Duration) -> Result<Self, BackendError> {
         Ok(Self {
-            client: Client::builder().build()?,
+            client: Client::builder()
+                .connect_timeout(connect)
+                .read_timeout(read)
+                .build()?,
+            retry_delays: RETRY_DELAYS_SECS.map(Duration::from_secs).into(),
         })
+    }
+
+    /// Replaces the waits between retries; their count is the retry limit.
+    pub fn with_retry_delays(mut self, delays: Vec<Duration>) -> Self {
+        self.retry_delays = delays.into();
+        self
+    }
+
+    /// How many times a failed request may be retried for this job.
+    fn max_retries(&self, opts: &JobOptions) -> usize {
+        opts.retry_count.map_or(self.retry_delays.len(), |count| {
+            (count as usize).min(self.retry_delays.len())
+        })
+    }
+
+    /// Waits out retry `attempt`. Returns false when the job was paused or
+    /// cancelled meanwhile, so the caller must stop instead of retrying.
+    async fn back_off(&self, ctx: &JobContext, attempt: usize) -> bool {
+        let delay = self.retry_delays.get(attempt).copied().unwrap_or_default();
+        tokio::select! {
+            () = sleep(delay) => true,
+            () = ctx.control.stopped() => false,
+        }
     }
 
     fn request(
@@ -193,7 +231,30 @@ impl HttpBackend {
         apply_options(self.client.request(method, url), opts)
     }
 
+    /// Downloads without ranges. A failed attempt starts over from the first
+    /// byte, since there is nothing to resume from.
     async fn run_single_stream(&self, ctx: JobContext) -> Result<RunOutcome, BackendError> {
+        let max_retries = self.max_retries(ctx.job.options());
+        let mut attempt = 0;
+        loop {
+            match self.single_stream_attempt(&ctx).await {
+                Err(error) if is_transient(&error) && attempt < max_retries => {
+                    if !self.back_off(&ctx, attempt).await {
+                        let _ = tokio::fs::remove_file(ctx.job.part_path()).await;
+                        return Ok(if ctx.control.is_cancelled() {
+                            RunOutcome::Cancelled
+                        } else {
+                            RunOutcome::Paused
+                        });
+                    }
+                    attempt += 1;
+                }
+                result => return result,
+            }
+        }
+    }
+
+    async fn single_stream_attempt(&self, ctx: &JobContext) -> Result<RunOutcome, BackendError> {
         let mut candidate_urls = vec![parse_url(ctx.job.source())?];
         for m in &ctx.job.options().mirrors {
             if let Ok(u) = Url::parse(m)
@@ -563,13 +624,7 @@ async fn download_segment(
         .await?;
 
     let mut attempt = 0;
-    let max_retries = ctx
-        .job
-        .options()
-        .retry_count
-        .map_or(RETRY_DELAYS_SECS.len(), |count| {
-            (count as usize).min(RETRY_DELAYS_SECS.len())
-        });
+    let max_retries = backend.max_retries(ctx.job.options());
     loop {
         if ctx.control.is_cancelled() || ctx.control.is_paused() {
             return Ok(None);
@@ -623,7 +678,9 @@ async fn download_segment(
                     continue;
                 }
                 if attempt < max_retries {
-                    sleep(Duration::from_secs(RETRY_DELAYS_SECS[attempt])).await;
+                    if !backend.back_off(ctx, attempt).await {
+                        return Ok(None);
+                    }
                     attempt += 1;
                     continue;
                 } else {
@@ -642,12 +699,24 @@ async fn download_segment(
                 continue;
             }
             if attempt < max_retries {
-                sleep(Duration::from_secs(RETRY_DELAYS_SECS[attempt])).await;
+                if !backend.back_off(ctx, attempt).await {
+                    return Ok(None);
+                }
                 attempt += 1;
                 continue;
             } else {
                 return Err(BackendError::Status(status));
             }
+        }
+
+        // A mirror that refuses permanently is skipped when another one is left.
+        if status.is_client_error()
+            && !matches!(status.as_u16(), 408 | 412 | 416 | 429)
+            && has_other_mirrors
+        {
+            let mut s = shared.lock().unwrap_or_else(|p| p.into_inner());
+            s.mark_mirror_failure(&url);
+            continue;
         }
 
         // A full body or a failed precondition means the file changed (or the
@@ -740,7 +809,9 @@ async fn download_segment(
 
             if let Some(err) = stream_err {
                 if attempt < max_retries {
-                    sleep(Duration::from_secs(RETRY_DELAYS_SECS[attempt])).await;
+                    if !backend.back_off(ctx, attempt).await {
+                        return Ok(None);
+                    }
                     attempt += 1;
                     continue;
                 } else {
@@ -752,7 +823,9 @@ async fn download_segment(
             break;
         } else if status.as_u16() == 408 || status.as_u16() == 429 || status.is_server_error() {
             if attempt < max_retries {
-                sleep(Duration::from_secs(RETRY_DELAYS_SECS[attempt])).await;
+                if !backend.back_off(ctx, attempt).await {
+                    return Ok(None);
+                }
                 attempt += 1;
                 continue;
             } else {
@@ -834,6 +907,17 @@ impl Backend for HttpBackend {
         } else {
             self.run_single_stream(ctx).await
         }
+    }
+}
+
+/// Returns whether trying the same request again may succeed.
+fn is_transient(error: &BackendError) -> bool {
+    match error {
+        BackendError::Http(_) => true,
+        BackendError::Status(status) => {
+            status.is_server_error() || matches!(status.as_u16(), 408 | 429)
+        }
+        _ => false,
     }
 }
 

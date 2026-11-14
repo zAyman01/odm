@@ -85,7 +85,7 @@ fn parse_invalid_xml_returns_error() {
     assert!(result.is_err());
 }
 
-async fn faulty_primary_server(payload_len: usize) -> String {
+async fn faulty_primary_server(payload_len: usize, get_status: StatusCode) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
 
@@ -105,7 +105,7 @@ async fn faulty_primary_server(payload_len: usize) -> String {
                 )
                     .into_response()
             } else {
-                (StatusCode::INTERNAL_SERVER_ERROR, "Primary failed").into_response()
+                (get_status, "Primary failed").into_response()
             }
         }),
     );
@@ -180,7 +180,7 @@ async fn working_mirror_server(payload: &'static [u8]) -> (String, Arc<AtomicUsi
 #[tokio::test]
 async fn multi_mirror_download_fails_over_to_working_mirror() {
     let payload = b"hello world mirror failover payload!";
-    let primary_url = faulty_primary_server(payload.len()).await;
+    let primary_url = faulty_primary_server(payload.len(), StatusCode::INTERNAL_SERVER_ERROR).await;
     let (mirror_url, mirror_hits) = working_mirror_server(payload).await;
 
     let dir = tempdir().unwrap();
@@ -205,5 +205,31 @@ async fn multi_mirror_download_fails_over_to_working_mirror() {
 
     let content = std::fs::read(completed_job.target_path()).unwrap();
     assert_eq!(content, payload);
+    assert!(mirror_hits.load(Ordering::SeqCst) > 0);
+}
+
+#[tokio::test]
+async fn mirror_returning_404_falls_through_to_next_mirror() {
+    let payload = b"hello world mirror failover payload!";
+    let primary_url = faulty_primary_server(payload.len(), StatusCode::NOT_FOUND).await;
+    let (mirror_url, mirror_hits) = working_mirror_server(payload).await;
+
+    let dir = tempdir().unwrap();
+    let engine = Engine::new(Store::open(dir.path().join("store.db")).unwrap()).unwrap();
+    let job = engine
+        .add(
+            &primary_url,
+            dir.path().to_path_buf(),
+            JobOptions {
+                mirrors: vec![mirror_url],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let completed_job = engine.run(job.id()).await.unwrap();
+
+    assert_eq!(completed_job.state(), JobState::Completed);
+    assert_eq!(std::fs::read(completed_job.target_path()).unwrap(), payload);
     assert!(mirror_hits.load(Ordering::SeqCst) > 0);
 }

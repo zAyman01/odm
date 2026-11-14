@@ -3,6 +3,8 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
@@ -250,4 +252,142 @@ async fn engine_downloads_from_local_server() {
             .as_slice(),
         PAYLOAD
     );
+}
+
+fn context_for(job: &Job, control: ControlToken) -> JobContext {
+    let (progress, _updates) = ProgressSink::new();
+    JobContext {
+        job: job.clone(),
+        control,
+        progress,
+        store: Store::open_in_memory().unwrap(),
+        limiter: Limiter::new(Arc::new(TokenBucket::new(0)), None),
+    }
+}
+
+async fn serve_routes(app: Router) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    addr
+}
+
+#[tokio::test]
+async fn single_stream_retries_after_connection_reset() {
+    let hits = Arc::new(AtomicUsize::new(0));
+    let counter = hits.clone();
+    let addr = serve_routes(Router::new().route(
+        "/reset.bin",
+        get(move || {
+            let attempt = counter.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if attempt == 0 {
+                    // Promise the whole file, send a few bytes, then fail.
+                    let chunks = futures_util::stream::iter(vec![
+                        Ok(bytes_of(&PAYLOAD[..5])),
+                        Err(std::io::Error::other("connection reset")),
+                    ]);
+                    let mut headers = HeaderMap::new();
+                    headers.insert(
+                        header::CONTENT_LENGTH,
+                        HeaderValue::from_str(&PAYLOAD.len().to_string()).unwrap(),
+                    );
+                    (StatusCode::OK, headers, Body::from_stream(chunks)).into_response()
+                } else {
+                    response(PAYLOAD, None, None)
+                }
+            }
+        }),
+    ))
+    .await;
+    let dir = TempDir::new().unwrap();
+    let job = Job::new(
+        Source::Url(format!("http://{addr}/reset.bin")),
+        dir.path().to_path_buf(),
+        JobOptions::default(),
+    );
+    let backend = HttpBackend::new()
+        .unwrap()
+        .with_retry_delays(vec![Duration::from_millis(10)]);
+    let (_handle, control) = ControlToken::new();
+
+    let outcome = backend.run(context_for(&job, control)).await.unwrap();
+
+    assert_eq!(outcome, RunOutcome::Completed);
+    assert_eq!(hits.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        std::fs::read(job.target_path()).unwrap().as_slice(),
+        PAYLOAD
+    );
+}
+
+fn bytes_of(data: &[u8]) -> axum::body::Bytes {
+    axum::body::Bytes::copy_from_slice(data)
+}
+
+#[tokio::test]
+async fn pause_during_backoff_returns_paused_quickly() {
+    let addr = serve_routes(Router::new().route(
+        "/down.bin",
+        get(|| async { StatusCode::INTERNAL_SERVER_ERROR }),
+    ))
+    .await;
+    let dir = TempDir::new().unwrap();
+    let job = Job::new(
+        Source::Url(format!("http://{addr}/down.bin")),
+        dir.path().to_path_buf(),
+        JobOptions::default(),
+    );
+    let backend = HttpBackend::new()
+        .unwrap()
+        .with_retry_delays(vec![Duration::from_secs(30)]);
+    let (handle, control) = ControlToken::new();
+    let context = context_for(&job, control);
+    let task = tokio::spawn(async move { backend.run(context).await });
+
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    handle.pause();
+
+    let outcome = tokio::time::timeout(Duration::from_secs(2), task)
+        .await
+        .expect("pause must cut the 30 s backoff short")
+        .unwrap()
+        .unwrap();
+    assert_eq!(outcome, RunOutcome::Paused);
+}
+
+#[tokio::test]
+async fn stalled_server_times_out() {
+    // Accepts connections and never answers.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((socket, _)) = listener.accept().await {
+            held.push(socket);
+        }
+    });
+    let dir = TempDir::new().unwrap();
+    let job = Job::new(
+        Source::Url(format!("http://{addr}/stalled.bin")),
+        dir.path().to_path_buf(),
+        JobOptions {
+            retry_count: Some(0),
+            ..Default::default()
+        },
+    );
+    let backend =
+        HttpBackend::with_timeouts(Duration::from_secs(1), Duration::from_millis(300)).unwrap();
+    let (_handle, control) = ControlToken::new();
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        backend.run(context_for(&job, control)),
+    )
+    .await
+    .expect("a stalled server must not hang the job");
+
+    assert!(result.is_err());
 }

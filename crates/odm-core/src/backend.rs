@@ -77,6 +77,20 @@ impl ControlToken {
     pub fn is_cancelled(&self) -> bool {
         matches!(self.command(), ControlCommand::Cancel)
     }
+
+    /// Resolves once the job is asked to pause or cancel, so a long wait can be cut short.
+    pub async fn stopped(&self) {
+        let mut receiver = self.receiver.clone();
+        loop {
+            if *receiver.borrow_and_update() != ControlCommand::Run {
+                return;
+            }
+            if receiver.changed().await.is_err() {
+                // The handle is gone, so nobody can stop the job any more.
+                std::future::pending::<()>().await;
+            }
+        }
+    }
 }
 
 /// A progress report from a running backend.
