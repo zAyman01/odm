@@ -268,3 +268,26 @@ async fn add_download_with_matching_url_selects_plugin_backend() {
     let detail: DownloadDetailDto = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(detail.backend.as_deref(), Some("plugin"));
 }
+
+#[tokio::test]
+async fn bad_plugin_toml_does_not_disable_others() {
+    let (dir, config) = setup_test_env("http://127.0.0.1:8080/file.bin");
+    let broken = dir.path().join("data").join("plugins").join("a-broken");
+    std::fs::create_dir_all(&broken).unwrap();
+    std::fs::write(broken.join("plugin.toml"), "this is [not valid toml").unwrap();
+    let app = build_router(config).unwrap();
+
+    let req = Request::builder()
+        .uri("/api/v1/plugins")
+        .header(HOST, "127.0.0.1:6820")
+        .header(AUTHORIZATION, "Bearer test-token")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+    let list: PluginListResponse = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(list.plugins.len(), 1);
+    assert_eq!(list.plugins[0].name, "sample-resolver");
+}

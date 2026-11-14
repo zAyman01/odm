@@ -71,9 +71,18 @@ impl PluginRegistry {
             let plugin_dir = entry.path();
             let manifest_path = plugin_dir.join("plugin.toml");
             if manifest_path.is_file() {
-                let content = std::fs::read_to_string(&manifest_path)?;
-                let manifest = PluginManifest::from_toml_str(&content)?;
-                discovered.push((manifest, plugin_dir));
+                // One broken plugin must not take the others down with it.
+                let loaded = std::fs::read_to_string(&manifest_path)
+                    .map_err(PluginError::from)
+                    .and_then(|content| PluginManifest::from_toml_str(&content));
+                match loaded {
+                    Ok(manifest) => discovered.push((manifest, plugin_dir)),
+                    Err(error) => tracing::warn!(
+                        plugin = %plugin_dir.display(),
+                        %error,
+                        "skipping plugin with an invalid manifest"
+                    ),
+                }
             }
         }
 
