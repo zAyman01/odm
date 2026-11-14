@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use axum::Router;
 use axum::body::Bytes;
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -536,4 +536,108 @@ async fn hls_live_playlist_is_rejected() {
         error.to_string().contains("live streams are not supported"),
         "got: {error}"
     );
+}
+
+const MANY_SEGMENTS: usize = 20;
+
+async fn many_playlist() -> Response {
+    let mut body = String::from("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:1\n");
+    for n in 0..MANY_SEGMENTS {
+        body.push_str(&format!("#EXTINF:1.0,\nmany/{n}\n"));
+    }
+    body.push_str("#EXT-X-ENDLIST\n");
+    ([(CONTENT_TYPE, "application/vnd.apple.mpegurl")], body).into_response()
+}
+
+/// Segment `n` holds 100 bytes of the value `n + 1`; the segment named by
+/// `failing` answers 500.
+async fn many_segment(Path(n): Path<usize>, State(failing): State<Arc<AtomicUsize>>) -> Response {
+    if failing.load(Ordering::SeqCst) == n {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    vec![n as u8 + 1; 100].into_response()
+}
+
+async fn serve_many(failing: Arc<AtomicUsize>) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new()
+        .route("/many.m3u8", get(many_playlist))
+        .route("/many/{n}", get(many_segment))
+        .with_state(failing);
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    addr
+}
+
+async fn prepare_many(addr: SocketAddr, dir: &TempDir) -> (HlsBackend, Job, Store) {
+    let backend = HlsBackend::new(reqwest::Client::new(), None);
+    let source = Source::Url(format!("http://{addr}/many.m3u8"));
+    let mut job = Job::new(
+        source.clone(),
+        dir.path().to_path_buf(),
+        JobOptions::default(),
+    );
+    job.apply_probe(
+        backend
+            .probe(&source, &JobOptions::default())
+            .await
+            .unwrap(),
+    );
+    let store = Store::open_in_memory().unwrap();
+    store.insert_job(&mut job).unwrap();
+    (backend, job, store)
+}
+
+fn many_context(job: &Job, store: &Store) -> (odm_core::backend::ControlHandle, JobContext) {
+    let (handle, control) = ControlToken::new();
+    let (progress, _) = ProgressSink::new();
+    let ctx = JobContext {
+        job: job.clone(),
+        control,
+        progress,
+        store: store.clone(),
+        limiter: Limiter::new(Arc::new(TokenBucket::new(0)), None),
+    };
+    (handle, ctx)
+}
+
+#[tokio::test]
+async fn hls_state_not_rewritten_per_segment() {
+    let addr = serve_many(Arc::new(AtomicUsize::new(usize::MAX))).await;
+    let dir = TempDir::new().unwrap();
+    let (backend, job, store) = prepare_many(addr, &dir).await;
+    let (_handle, ctx) = many_context(&job, &store);
+
+    let before = store.total_changes().unwrap();
+    let outcome = backend.run(ctx).await.unwrap();
+    let writes = store.total_changes().unwrap() - before;
+
+    assert_eq!(outcome, RunOutcome::Completed);
+    assert!(
+        writes <= 4,
+        "{writes} state writes for {MANY_SEGMENTS} segments"
+    );
+}
+
+#[tokio::test]
+async fn resume_after_a_failure_does_not_duplicate_unsaved_segments() {
+    let failing = Arc::new(AtomicUsize::new(15));
+    let addr = serve_many(failing.clone()).await;
+    let dir = TempDir::new().unwrap();
+    let (backend, job, store) = prepare_many(addr, &dir).await;
+
+    let (_handle, ctx) = many_context(&job, &store);
+    assert!(backend.run(ctx).await.is_err());
+
+    failing.store(usize::MAX, Ordering::SeqCst);
+    let (_handle, ctx) = many_context(&store.get_job(job.id()).unwrap(), &store);
+    let outcome = backend.run(ctx).await.unwrap();
+
+    assert_eq!(outcome, RunOutcome::Completed);
+    let expected: Vec<u8> = (0..MANY_SEGMENTS)
+        .flat_map(|n| vec![n as u8 + 1; 100])
+        .collect();
+    assert_eq!(std::fs::read(job.target_path()).unwrap(), expected);
 }

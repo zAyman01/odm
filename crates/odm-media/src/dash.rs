@@ -8,12 +8,12 @@ use odm_core::backend::{Backend, BackendError, JobContext, RunOutcome};
 use odm_core::job::{BackendKind, JobOptions, ProbeResult, Source};
 use reqwest::header::{COOKIE, HeaderName, HeaderValue, REFERER, USER_AGENT};
 use reqwest::{Client, RequestBuilder};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use url::Url;
 
 use crate::mux;
 use crate::quality::QualityInfo;
-use crate::state::DashResumeState;
+use crate::state::{DashResumeState, SaveThrottle, open_for_segments, save_state};
 
 #[derive(Debug, Clone)]
 struct DashSegment {
@@ -399,7 +399,10 @@ impl DashBackend {
         let start_len = file.metadata().await?.len();
         let result = self.stream_segment(ctx, seg, file, downloaded_bytes).await;
         if result.is_err() {
-            let _ = file.set_len(start_len).await;
+            // Cut the partial segment off and move the write position back with it.
+            if file.set_len(start_len).await.is_ok() {
+                let _ = file.seek(std::io::SeekFrom::Start(start_len)).await;
+            }
         }
         result
     }
@@ -638,6 +641,8 @@ impl Backend for DashBackend {
                 selected_quality: selected_quality.clone(),
                 total_video_segments,
                 total_audio_segments,
+                video_bytes: 0,
+                audio_bytes: 0,
             });
         resume_state.total_video_segments = total_video_segments;
         resume_state.total_audio_segments = total_audio_segments;
@@ -656,39 +661,25 @@ impl Backend for DashBackend {
         a_tmp_os.push(".a.tmp");
         let audio_tmp_path = PathBuf::from(a_tmp_os);
 
-        let mut video_file = if resume_state.completed_video_segments.is_empty() {
-            tokio::fs::OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open(&video_tmp_path)
-                .await?
-        } else {
-            tokio::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&video_tmp_path)
-                .await?
-        };
+        let mut video_file = open_for_segments(
+            &video_tmp_path,
+            !resume_state.completed_video_segments.is_empty(),
+            resume_state.video_bytes,
+        )
+        .await?;
 
-        let mut audio_file = if resume_state.completed_audio_segments.is_empty() {
-            tokio::fs::OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open(&audio_tmp_path)
-                .await?
-        } else {
-            tokio::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&audio_tmp_path)
-                .await?
-        };
+        let mut audio_file = open_for_segments(
+            &audio_tmp_path,
+            !resume_state.completed_audio_segments.is_empty(),
+            resume_state.audio_bytes,
+        )
+        .await?;
 
         let mut downloaded_bytes =
             video_file.metadata().await?.len() + audio_file.metadata().await?.len();
         ctx.progress.report(downloaded_bytes, ctx.job.total_bytes());
+
+        let mut save_throttle = SaveThrottle::new();
 
         // Download video segments
         for (idx, seg) in video_segments.iter().enumerate() {
@@ -705,9 +696,7 @@ impl Backend for DashBackend {
             if ctx.control.is_paused() {
                 video_file.flush().await?;
                 audio_file.flush().await?;
-                let state_json = serde_json::to_string(&resume_state)
-                    .map_err(|e| BackendError::Media(e.to_string()))?;
-                ctx.store.set_backend_state(ctx.job.id(), &state_json)?;
+                save_dash_state(&ctx, &mut resume_state, &video_file, &audio_file).await?;
                 return Ok(RunOutcome::Paused);
             }
 
@@ -715,14 +704,15 @@ impl Backend for DashBackend {
                 .await?;
 
             resume_state.completed_video_segments.push(seg_idx);
-            let state_json = serde_json::to_string(&resume_state)
-                .map_err(|e| BackendError::Media(e.to_string()))?;
-            ctx.store.set_backend_state(ctx.job.id(), &state_json)?;
+            let paused = ctx.control.is_paused();
+            if paused || save_throttle.segment_done() {
+                save_dash_state(&ctx, &mut resume_state, &video_file, &audio_file).await?;
+            }
 
             if ctx.control.is_cancelled() {
                 return Ok(RunOutcome::Cancelled);
             }
-            if ctx.control.is_paused() {
+            if paused {
                 return Ok(RunOutcome::Paused);
             }
         }
@@ -742,9 +732,7 @@ impl Backend for DashBackend {
             if ctx.control.is_paused() {
                 video_file.flush().await?;
                 audio_file.flush().await?;
-                let state_json = serde_json::to_string(&resume_state)
-                    .map_err(|e| BackendError::Media(e.to_string()))?;
-                ctx.store.set_backend_state(ctx.job.id(), &state_json)?;
+                save_dash_state(&ctx, &mut resume_state, &video_file, &audio_file).await?;
                 return Ok(RunOutcome::Paused);
             }
 
@@ -752,14 +740,15 @@ impl Backend for DashBackend {
                 .await?;
 
             resume_state.completed_audio_segments.push(seg_idx);
-            let state_json = serde_json::to_string(&resume_state)
-                .map_err(|e| BackendError::Media(e.to_string()))?;
-            ctx.store.set_backend_state(ctx.job.id(), &state_json)?;
+            let paused = ctx.control.is_paused();
+            if paused || save_throttle.segment_done() {
+                save_dash_state(&ctx, &mut resume_state, &video_file, &audio_file).await?;
+            }
 
             if ctx.control.is_cancelled() {
                 return Ok(RunOutcome::Cancelled);
             }
-            if ctx.control.is_paused() {
+            if paused {
                 return Ok(RunOutcome::Paused);
             }
         }
@@ -789,6 +778,18 @@ impl Backend for DashBackend {
 
         Ok(RunOutcome::Completed)
     }
+}
+
+/// Saves the resume state together with the lengths of the two files it describes.
+async fn save_dash_state(
+    ctx: &JobContext,
+    state: &mut DashResumeState,
+    video_file: &tokio::fs::File,
+    audio_file: &tokio::fs::File,
+) -> Result<(), BackendError> {
+    state.video_bytes = video_file.metadata().await?.len();
+    state.audio_bytes = audio_file.metadata().await?.len();
+    save_state(ctx, state)
 }
 
 /// A live manifest has no end, so there is nothing finite to download.

@@ -111,13 +111,19 @@ function labelledCell(label, className) {
   return td;
 }
 
-function renderRow(item) {
+// The numbers a row shows, worked out from a download item.
+function rowMetrics(item) {
   const total = item.total_bytes;
   const downloaded = item.downloaded_bytes || 0;
   const pct = item.progress_pct || (total > 0 ? (downloaded / total) * 100 : 0);
   const speed = item.speed_bps || 0;
   const etaSecs = (speed > 0 && total && total > downloaded) ? (total - downloaded) / speed : 0;
   const etaText = speed > 0 ? formatEta(etaSecs) : '';
+  return { total, pct, speed, etaText };
+}
+
+function renderRow(item) {
+  const { total, pct, speed, etaText } = rowMetrics(item);
 
   let stateClass = 'state-queued';
   let barClass = '';
@@ -133,6 +139,7 @@ function renderRow(item) {
 
   const tr = el('tr');
   tr.dataset.id = String(item.id);
+  tr.dataset.state = st;
 
   const name = labelledCell('Filename', 'filename-cell');
   name.textContent = item.filename || item.url;
@@ -177,20 +184,51 @@ function renderRow(item) {
   return tr;
 }
 
+function findRow(id) {
+  return document.querySelector('#downloadsTableBody tr[data-id="' + String(id) + '"]');
+}
+
+// Changes only the cells that move while a download runs.
+function updateRow(tr, item) {
+  const { total, pct, speed, etaText } = rowMetrics(item);
+  const cell = (label) => tr.querySelector('td[data-label="' + label + '"]');
+
+  const name = cell('Filename');
+  const title = item.filename || item.url;
+  if (name.textContent !== title) {
+    name.textContent = title;
+    name.title = title;
+  }
+  cell('Size').textContent = total ? formatBytes(total) : '--';
+  cell('Speed').textContent = speed > 0 ? formatSpeed(speed) : '--';
+  tr.querySelector('.progress-bar').style.width = Math.min(100, Math.max(0, pct)) + '%';
+  const meta = tr.querySelectorAll('.progress-meta span');
+  meta[0].textContent = pct.toFixed(1) + '%';
+  meta[1].textContent = etaText;
+}
+
+// Brings the table in line with `downloads`. A row whose state did not change
+// is updated where it stands; a new row, or one whose buttons change, is built again.
 function renderDownloads() {
   const tbody = document.getElementById('downloadsTableBody');
-  tbody.replaceChildren();
   if (!downloads || downloads.length === 0) {
     const tr = el('tr');
     const td = el('td', 'empty-state', 'No downloads yet');
     td.colSpan = 6;
     tr.appendChild(td);
-    tbody.appendChild(tr);
+    tbody.replaceChildren(tr);
     return;
   }
-  for (const item of downloads) {
-    tbody.appendChild(renderRow(item));
-  }
+  const rows = downloads.map((item) => {
+    const existing = findRow(item.id);
+    const st = (item.state || '').toLowerCase();
+    if (existing && existing.dataset.state === st) {
+      updateRow(existing, item);
+      return existing;
+    }
+    return renderRow(item);
+  });
+  tbody.replaceChildren(...rows);
 }
 
 // Row buttons use data attributes: inline handlers are blocked by the CSP.
@@ -322,7 +360,12 @@ function handleWsEvent(event) {
       if (data.total_bytes && data.total_bytes > 0) {
         item.progress_pct = (data.downloaded_bytes / data.total_bytes) * 100;
       }
-      renderDownloads();
+      const row = findRow(item.id);
+      if (row) {
+        updateRow(row, item);
+      } else {
+        renderDownloads();
+      }
     }
   } else if (type === 'job_removed') {
     downloads = downloads.filter(d => d.id !== data);

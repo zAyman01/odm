@@ -15,7 +15,7 @@ use url::Url;
 
 use crate::mux;
 use crate::quality::QualityInfo;
-use crate::state::HlsResumeState;
+use crate::state::{HlsResumeState, SaveThrottle, open_for_segments, save_state};
 
 type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
 
@@ -319,6 +319,7 @@ impl Backend for HlsBackend {
                 completed_segments: Vec::new(),
                 selected_quality: selected_quality.clone(),
                 total_segments,
+                written_bytes: 0,
             });
         resume_state.total_segments = total_segments;
         if resume_state.selected_quality.is_none() {
@@ -328,20 +329,12 @@ impl Backend for HlsBackend {
         tokio::fs::create_dir_all(ctx.job.target_dir()).await?;
         let part_path = ctx.job.part_path();
 
-        let mut file = if resume_state.completed_segments.is_empty() {
-            tokio::fs::OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open(&part_path)
-                .await?
-        } else {
-            tokio::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&part_path)
-                .await?
-        };
+        let mut file = open_for_segments(
+            &part_path,
+            !resume_state.completed_segments.is_empty(),
+            resume_state.written_bytes,
+        )
+        .await?;
 
         let mut downloaded_bytes = file.metadata().await?.len();
         ctx.progress.report(downloaded_bytes, ctx.job.total_bytes());
@@ -351,6 +344,7 @@ impl Backend for HlsBackend {
         // The init segment in effect, and the one already written to the file.
         let mut current_map: Option<&m3u8_rs::Map> = None;
         let mut written_map: Option<String> = None;
+        let mut save_throttle = SaveThrottle::new();
 
         for (idx, seg) in media.segments.iter().enumerate() {
             let seg_idx = idx as u32;
@@ -373,9 +367,8 @@ impl Backend for HlsBackend {
             }
             if ctx.control.is_paused() {
                 file.flush().await?;
-                let state_json = serde_json::to_string(&resume_state)
-                    .map_err(|e| BackendError::Media(e.to_string()))?;
-                ctx.store.set_backend_state(ctx.job.id(), &state_json)?;
+                resume_state.written_bytes = downloaded_bytes;
+                save_state(&ctx, &resume_state)?;
                 return Ok(RunOutcome::Paused);
             }
 
@@ -478,14 +471,16 @@ impl Backend for HlsBackend {
             ctx.progress.report(downloaded_bytes, ctx.job.total_bytes());
 
             resume_state.completed_segments.push(seg_idx);
-            let state_json = serde_json::to_string(&resume_state)
-                .map_err(|e| BackendError::Media(e.to_string()))?;
-            ctx.store.set_backend_state(ctx.job.id(), &state_json)?;
+            let paused = ctx.control.is_paused();
+            if paused || save_throttle.segment_done() {
+                resume_state.written_bytes = downloaded_bytes;
+                save_state(&ctx, &resume_state)?;
+            }
 
             if ctx.control.is_cancelled() {
                 return Ok(RunOutcome::Cancelled);
             }
-            if ctx.control.is_paused() {
+            if paused {
                 return Ok(RunOutcome::Paused);
             }
         }

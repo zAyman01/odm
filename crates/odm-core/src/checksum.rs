@@ -58,7 +58,8 @@ pub enum ChecksumError {
 /// Streamingly computes the cryptographic hash of `path` and verifies it against `checksum`.
 pub async fn verify_file_checksum(path: &Path, checksum: &Checksum) -> Result<(), ChecksumError> {
     let mut file = tokio::fs::File::open(path).await?;
-    let mut buffer = [0u8; 65536];
+    // Large reads keep the disk busy; the buffer lives on the heap, not in the future.
+    let mut buffer = vec![0u8; 1024 * 1024];
 
     let actual_hex = match checksum.algorithm {
         ChecksumAlgorithm::Sha256 => {

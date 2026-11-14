@@ -192,3 +192,31 @@ async fn app_js_never_interpolates_into_inner_html() {
     }
     assert!(js.contains("textContent"));
 }
+
+#[tokio::test]
+async fn app_js_updates_rows_by_id() {
+    let dir = tempdir().unwrap();
+    let config = DaemonConfig::for_test(dir.path(), "test-token");
+    let app = build_router(config).unwrap();
+
+    let req = Request::builder()
+        .uri("/app.js")
+        .header(header::HOST, "127.0.0.1:6820")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), 1_000_000)
+        .await
+        .unwrap();
+    let script = String::from_utf8_lossy(&bytes);
+
+    assert!(
+        script.contains("tr[data-id="),
+        "rows are not looked up by job id"
+    );
+    assert!(
+        !script.contains("tbody.innerHTML"),
+        "the table body is rebuilt as a string"
+    );
+}
