@@ -375,11 +375,19 @@ async fn magnet_job_downloads_into_target_dir_with_selected_files() {
     .unwrap();
     let backend = TorrentBackend::new_with_session(leecher_session, 0.0);
 
+    let source = Source::Magnet(magnet_uri);
+    // The torrent lists its files in the order the creator read the folder, which differs by
+    // operating system, so find b.bin by name instead of assuming its index.
+    let listed = backend.probe_torrent_files(&source).await.unwrap();
+    let second_index = listed
+        .iter()
+        .find(|file| file.path.ends_with("b.bin"))
+        .unwrap()
+        .index;
     let options = JobOptions {
-        selected_files: Some(vec![1]),
+        selected_files: Some(vec![second_index]),
         ..Default::default()
     };
-    let source = Source::Magnet(magnet_uri);
     let probe = backend.probe(&source, &options).await.unwrap();
 
     let store = Store::open_in_memory().unwrap();
