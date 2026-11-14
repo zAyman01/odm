@@ -224,3 +224,53 @@ async fn cli_add_with_select_files_and_seed_ratio() {
     assert_eq!(detail.options.selected_files, Some(vec![0, 2]));
     assert_eq!(detail.options.seed_ratio, Some(0.5));
 }
+
+#[tokio::test]
+async fn torrent_file_path_is_sent_absolute() {
+    let (_daemon, server_url, token) = spawn_test_daemon().await;
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("relative.torrent"), b"d8:announce0:e").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_odm"))
+        .current_dir(dir.path())
+        .args([
+            "--server",
+            &server_url,
+            "--token",
+            &token,
+            "add",
+            "--torrent-file",
+            "relative.torrent",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let added: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&output.stdout)).unwrap();
+    let id = added["id"].as_i64().unwrap();
+
+    let info = Command::new(env!("CARGO_BIN_EXE_odm"))
+        .args([
+            "--server",
+            &server_url,
+            "--token",
+            &token,
+            "info",
+            &id.to_string(),
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(info.status.success());
+    let detail: odm_api::DownloadDetailDto =
+        serde_json::from_str(&String::from_utf8_lossy(&info.stdout)).unwrap();
+    assert_eq!(
+        std::path::PathBuf::from(&detail.item.url),
+        dir.path().join("relative.torrent")
+    );
+}

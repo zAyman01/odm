@@ -271,3 +271,41 @@ async fn cli_queue_schedule_command() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("23:00"));
 }
+
+#[test]
+fn mirrors_with_multiple_urls_is_an_error() {
+    let output = Command::new(env!("CARGO_BIN_EXE_odm"))
+        .args([
+            "add",
+            "http://127.0.0.1:1/a.bin",
+            "http://127.0.0.1:1/b.bin",
+            "--mirror",
+            "http://127.0.0.1:1/mirror.bin",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("single URL"), "stderr: {stderr}");
+}
+
+#[test]
+fn json_output_escapes_the_server_url() {
+    let output = Command::new(env!("CARGO_BIN_EXE_odm"))
+        .args([
+            "--server",
+            "http://127.0.0.1:1\\",
+            "--json",
+            "daemon",
+            "status",
+        ])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let first_line = stdout.lines().next().unwrap();
+    let value: serde_json::Value =
+        serde_json::from_str(first_line).unwrap_or_else(|e| panic!("not JSON ({e}): {first_line}"));
+    assert_eq!(value["server"], "http://127.0.0.1:1\\");
+}

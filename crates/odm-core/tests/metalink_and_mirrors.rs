@@ -34,7 +34,7 @@ fn parse_metalink_v3_xml() {
   </files>
 </metalink>"#;
 
-    let spec = parse_metalink(xml).unwrap();
+    let spec = parse_metalink(xml).unwrap().remove(0);
     assert_eq!(spec.filename, "example.zip");
     assert_eq!(spec.size, Some(1048576));
     assert_eq!(
@@ -64,7 +64,7 @@ fn parse_meta4_v4_xml() {
   </file>
 </metalink>"#;
 
-    let spec = parse_metalink(xml).unwrap();
+    let spec = parse_metalink(xml).unwrap().remove(0);
     assert_eq!(spec.filename, "package.tar.gz");
     assert_eq!(spec.size, Some(2048));
     assert_eq!(
@@ -232,4 +232,58 @@ async fn mirror_returning_404_falls_through_to_next_mirror() {
     assert_eq!(completed_job.state(), JobState::Completed);
     assert_eq!(std::fs::read(completed_job.target_path()).unwrap(), payload);
     assert!(mirror_hits.load(Ordering::SeqCst) > 0);
+}
+
+#[test]
+fn metalink_with_two_files_yields_two_specs() {
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<metalink xmlns="urn:ietf:params:xml:ns:metalink">
+  <file name="one.bin">
+    <size>10</size>
+    <hash type="sha-256">1111111111111111111111111111111111111111111111111111111111111111</hash>
+    <url>https://one.example.com/one.bin</url>
+  </file>
+  <file name="two.bin">
+    <size>20</size>
+    <hash type="md5">22222222222222222222222222222222</hash>
+    <url priority="2">https://mirror.example.com/two.bin</url>
+    <url priority="1">https://two.example.com/two.bin</url>
+  </file>
+</metalink>"#;
+
+    let specs = parse_metalink(xml).unwrap();
+
+    assert_eq!(specs.len(), 2);
+    assert_eq!(specs[0].filename, "one.bin");
+    assert_eq!(specs[0].size, Some(10));
+    assert_eq!(specs[0].urls, vec!["https://one.example.com/one.bin"]);
+    assert_eq!(
+        specs[0].checksum.as_ref().unwrap().algorithm,
+        ChecksumAlgorithm::Sha256
+    );
+    assert_eq!(specs[1].filename, "two.bin");
+    assert_eq!(specs[1].size, Some(20));
+    assert_eq!(
+        specs[1].urls,
+        vec![
+            "https://two.example.com/two.bin",
+            "https://mirror.example.com/two.bin"
+        ]
+    );
+    assert_eq!(
+        specs[1].checksum.as_ref().unwrap().algorithm,
+        ChecksumAlgorithm::Md5
+    );
+}
+
+#[test]
+fn ampersand_entity_in_url_is_unescaped() {
+    let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<metalink xmlns="urn:ietf:params:xml:ns:metalink">
+  <file name="a.bin"><url>https://example.com/a?x=1&amp;y=2</url></file>
+</metalink>"#;
+
+    let specs = parse_metalink(xml).unwrap();
+
+    assert_eq!(specs[0].urls, vec!["https://example.com/a?x=1&y=2"]);
 }

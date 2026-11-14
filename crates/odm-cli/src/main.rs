@@ -27,14 +27,31 @@ async fn main() {
 
     if let Err(err) = result {
         if json {
-            println!(
-                r#"{{"error":{}}}"#,
-                serde_json::to_string(&err).unwrap_or_default()
-            );
+            println!("{}", serde_json::json!({ "error": err }));
         } else {
             eprintln!("Error: {err}");
         }
         std::process::exit(1);
+    }
+}
+
+/// One download the `add` command will request.
+struct AddItem {
+    url: String,
+    /// A name the source dictates, such as a metalink file name.
+    filename: Option<String>,
+    mirrors: Vec<String>,
+    checksum: Option<ChecksumDto>,
+}
+
+impl AddItem {
+    fn plain(url: String) -> Self {
+        Self {
+            url,
+            filename: None,
+            mirrors: Vec::new(),
+            checksum: None,
+        }
     }
 }
 
@@ -44,9 +61,12 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
             Ok(health) => {
                 if json {
                     println!(
-                        r#"{{"status":"ok","version":"{}","server":"{}"}}"#,
-                        health.version,
-                        client.server_url()
+                        "{}",
+                        serde_json::json!({
+                            "status": "ok",
+                            "version": health.version,
+                            "server": client.server_url(),
+                        })
                     );
                 } else {
                     println!(
@@ -60,9 +80,12 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
             Err(err) => {
                 if json {
                     println!(
-                        r#"{{"status":"offline","server":"{}","error":{}}}"#,
-                        client.server_url(),
-                        serde_json::to_string(&err).unwrap_or_default()
+                        "{}",
+                        serde_json::json!({
+                            "status": "offline",
+                            "server": client.server_url(),
+                            "error": err,
+                        })
                     );
                 } else {
                     eprintln!(
@@ -93,57 +116,74 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
                 quality,
                 ytdlp,
             } = *args;
-            let mut final_urls = Vec::new();
-            let mut metalink_checksum = None;
-            let mut all_mirrors = mirror;
+            let mut items: Vec<AddItem> = Vec::new();
 
             if let Some(torrent_path) = torrent_file {
-                final_urls.push(torrent_path);
+                // The daemon runs elsewhere, so a relative path would point nowhere.
+                let absolute = std::path::absolute(&torrent_path)
+                    .map_err(|e| format!("Cannot resolve torrent file '{torrent_path}': {e}"))?;
+                items.push(AddItem::plain(absolute.to_string_lossy().into_owned()));
             }
 
             if let Some(metalink_path) = metalink {
                 let xml = std::fs::read_to_string(&metalink_path)
                     .map_err(|e| format!("Failed to read metalink file '{metalink_path}': {e}"))?;
-                let spec = odm_core::metalink::parse_metalink(&xml)
+                let specs = odm_core::metalink::parse_metalink(&xml)
                     .map_err(|e| format!("Failed to parse metalink: {e}"))?;
-                if let Some(first_url) = spec.urls.first() {
-                    final_urls.push(first_url.clone());
-                    for m in spec.urls.iter().skip(1) {
-                        all_mirrors.push(m.clone());
-                    }
-                }
-                if let Some(ref cs) = spec.checksum {
-                    let algorithm = match cs.algorithm {
-                        odm_core::checksum::ChecksumAlgorithm::Sha256 => ChecksumAlgorithm::Sha256,
-                        odm_core::checksum::ChecksumAlgorithm::Sha1 => ChecksumAlgorithm::Sha1,
-                        odm_core::checksum::ChecksumAlgorithm::Md5 => ChecksumAlgorithm::Md5,
+                for spec in specs {
+                    let mut file_urls = spec.urls.into_iter();
+                    let Some(url) = file_urls.next() else {
+                        continue;
                     };
-                    metalink_checksum = Some(ChecksumDto {
-                        algorithm,
-                        digest: cs.expected.clone(),
+                    items.push(AddItem {
+                        url,
+                        filename: Some(spec.filename),
+                        mirrors: file_urls.collect(),
+                        checksum: spec.checksum.map(|cs| ChecksumDto {
+                            algorithm: match cs.algorithm {
+                                odm_core::checksum::ChecksumAlgorithm::Sha256 => {
+                                    ChecksumAlgorithm::Sha256
+                                }
+                                odm_core::checksum::ChecksumAlgorithm::Sha1 => {
+                                    ChecksumAlgorithm::Sha1
+                                }
+                                odm_core::checksum::ChecksumAlgorithm::Md5 => {
+                                    ChecksumAlgorithm::Md5
+                                }
+                            },
+                            digest: cs.expected,
+                        }),
                     });
                 }
             }
 
             for url in urls {
                 match odm_core::batch::expand_batch_url(&url) {
-                    Ok(expanded) => final_urls.extend(expanded),
-                    Err(_) => final_urls.push(url),
+                    Ok(expanded) => items.extend(expanded.into_iter().map(AddItem::plain)),
+                    Err(_) => items.push(AddItem::plain(url)),
                 }
             }
 
-            if final_urls.is_empty() {
+            if items.is_empty() {
                 return Err("No URLs specified".to_string());
             }
 
-            let parsed_checksum = if let Some(ref cs) = checksum {
-                Some(
-                    cs.parse::<ChecksumDto>()
-                        .map_err(|e| format!("Invalid checksum: {e}"))?,
-                )
-            } else {
-                metalink_checksum
-            };
+            // --mirror and --checksum describe one file, so they need exactly one.
+            if (!mirror.is_empty() || checksum.is_some()) && items.len() != 1 {
+                return Err(format!(
+                    "--mirror and --checksum apply to a single URL, but {} were given; add them one at a time",
+                    items.len()
+                ));
+            }
+            if let Some(only) = items.first_mut() {
+                only.mirrors.extend(mirror);
+                if let Some(cs) = checksum {
+                    only.checksum = Some(
+                        cs.parse::<ChecksumDto>()
+                            .map_err(|e| format!("Invalid checksum: {e}"))?,
+                    );
+                }
+            }
 
             let parsed_headers = if headers.is_empty() {
                 None
@@ -155,12 +195,6 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
                     }
                 }
                 Some(h_vec)
-            };
-
-            let mirrors_opt = if all_mirrors.is_empty() {
-                None
-            } else {
-                Some(all_mirrors)
             };
 
             let parsed_selected_files = if let Some(sf) = select_files {
@@ -179,54 +213,42 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
                 None
             };
 
-            let options = if segments.is_some()
-                || limit.is_some()
-                || parsed_headers.is_some()
-                || parsed_checksum.is_some()
-                || mirrors_opt.is_some()
-                || parsed_selected_files.is_some()
-                || seed_ratio.is_some()
-                || quality.is_some()
-            {
-                Some(JobOptionsDto {
-                    segments,
-                    speed_limit: limit,
-                    headers: parsed_headers,
-                    user_agent: None,
-                    referer: None,
-                    cookies: None,
-                    checksum: parsed_checksum,
-                    mirrors: mirrors_opt,
-                    selected_files: parsed_selected_files,
-                    seed_ratio,
-                    quality,
-                })
-            } else {
-                None
+            let shared_options = JobOptionsDto {
+                segments,
+                speed_limit: limit,
+                headers: parsed_headers,
+                selected_files: parsed_selected_files,
+                seed_ratio,
+                quality,
+                ..JobOptionsDto::default()
             };
 
-            let single = final_urls.len() == 1;
-            for url in final_urls {
-                let filename = if single { output.clone() } else { None };
+            let single = items.len() == 1;
+            for item in items {
+                let filename = item
+                    .filename
+                    .clone()
+                    .or_else(|| if single { output.clone() } else { None });
+                let options = JobOptionsDto {
+                    checksum: item.checksum.clone(),
+                    mirrors: (!item.mirrors.is_empty()).then(|| item.mirrors.clone()),
+                    ..shared_options.clone()
+                };
                 let req = AddDownloadRequest {
-                    url: url.clone(),
+                    url: item.url.clone(),
                     target_dir: dir.clone(),
                     filename,
                     queue: queue.clone(),
                     category: category.clone(),
-                    options: options.clone(),
+                    options: (options != JobOptionsDto::default()).then_some(options),
                     backend: ytdlp.then(|| "ytdlp".to_string()),
                 };
 
                 let resp = client.add_download(&req).await?;
                 if json {
-                    println!(
-                        r#"{{"id":{},"url":{}}}"#,
-                        resp.id,
-                        serde_json::to_string(&url).unwrap_or_default()
-                    );
+                    println!("{}", serde_json::json!({ "id": resp.id, "url": item.url }));
                 } else {
-                    println!("Added download #{} ({url})", resp.id);
+                    println!("Added download #{} ({})", resp.id, item.url);
                 }
             }
             Ok(())
@@ -263,7 +285,7 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
         Command::Pause { id } => {
             client.pause_download(id).await?;
             if json {
-                println!(r#"{{"status":"paused","id":{id}}}"#);
+                println!("{}", serde_json::json!({ "status": "paused", "id": id }));
             } else {
                 println!("Paused download #{id}");
             }
@@ -273,7 +295,7 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
         Command::Resume { id } => {
             client.resume_download(id).await?;
             if json {
-                println!(r#"{{"status":"resumed","id":{id}}}"#);
+                println!("{}", serde_json::json!({ "status": "resumed", "id": id }));
             } else {
                 println!("Resumed download #{id}");
             }
@@ -283,7 +305,7 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
         Command::Cancel { id } => {
             client.cancel_download(id).await?;
             if json {
-                println!(r#"{{"status":"cancelled","id":{id}}}"#);
+                println!("{}", serde_json::json!({ "status": "cancelled", "id": id }));
             } else {
                 println!("Cancelled download #{id}");
             }
@@ -293,7 +315,7 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
         Command::Retry { id } => {
             client.retry_download(id).await?;
             if json {
-                println!(r#"{{"status":"retrying","id":{id}}}"#);
+                println!("{}", serde_json::json!({ "status": "retrying", "id": id }));
             } else {
                 println!("Retried download #{id}");
             }
@@ -303,7 +325,7 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
         Command::Remove { id, delete_file } => {
             client.delete_download(id, delete_file).await?;
             if json {
-                println!(r#"{{"status":"removed","id":{id}}}"#);
+                println!("{}", serde_json::json!({ "status": "removed", "id": id }));
             } else {
                 println!("Removed download #{id}");
             }
@@ -388,8 +410,8 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
                 client.delete_queue(&name).await?;
                 if json {
                     println!(
-                        r#"{{"status":"deleted","name":{}}}"#,
-                        serde_json::to_string(&name).unwrap_or_default()
+                        "{}",
+                        serde_json::json!({ "status": "deleted", "name": name })
                     );
                 } else {
                     println!("Deleted queue '{name}'");
@@ -435,8 +457,8 @@ async fn run_command(command: Command, client: &DaemonClient, json: bool) -> Res
                 client.delete_category(&name).await?;
                 if json {
                     println!(
-                        r#"{{"status":"deleted","category":{}}}"#,
-                        serde_json::to_string(&name).unwrap_or_default()
+                        "{}",
+                        serde_json::json!({ "status": "deleted", "category": name })
                     );
                 } else {
                     println!("Deleted category '{name}'");
