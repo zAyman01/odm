@@ -4,12 +4,15 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 env:
   CARGO_TERM_COLOR: always
+  # A manual run is a dry run that builds everything and publishes nothing.
+  RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v0.0.0-test' }}
 
 jobs:
   build-binaries:
@@ -60,7 +63,7 @@ jobs:
           cp README.md LICENSE-MIT LICENSE-APACHE staging/
 
           mkdir -p release-pkg
-          ARCHIVE_NAME="odm-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.archive_type }}"
+          ARCHIVE_NAME="odm-${{ env.RELEASE_TAG }}-${{ matrix.target }}.${{ matrix.archive_type }}"
           if [ "${{ matrix.archive_type }}" = "tar.gz" ]; then
             tar -czf "release-pkg/$ARCHIVE_NAME" -C staging .
           fi
@@ -68,7 +71,29 @@ jobs:
       - name: Package Windows archive
         if: matrix.archive_type == 'zip'
         shell: pwsh
-        run: Compress-Archive -Path staging/* -DestinationPath "release-pkg/odm-${{ github.ref_name }}-${{ matrix.target }}.zip"
+        run: Compress-Archive -Path staging/* -DestinationPath "release-pkg/odm-${{ env.RELEASE_TAG }}-${{ matrix.target }}.zip"
+
+      - name: Unpack the browser extension for the installer
+        run: node scripts/package-extension.mjs --out-dir dist
+
+      - name: Build Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          & $iscc "/DAppVersion=$($env:RELEASE_TAG.TrimStart('v'))" "/DStageDir=$PWD\staging" "/DOutputName=odm-${{ env.RELEASE_TAG }}-${{ matrix.target }}-setup" installer\windows\odm.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+
+      - name: Build Debian package
+        if: runner.os == 'Linux'
+        run: installer/linux/build-deb.sh "${RELEASE_TAG#v}" staging "release-pkg/odm-${{ env.RELEASE_TAG }}-amd64.deb"
+
+      - name: Build macOS disk image
+        if: runner.os == 'macOS'
+        run: installer/macos/build-dmg.sh "${RELEASE_TAG#v}" staging "release-pkg/odm-${{ env.RELEASE_TAG }}-${{ matrix.target }}.dmg"
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
@@ -101,6 +126,7 @@ jobs:
   publish-release:
     name: publish release
     needs: [build-binaries, build-extensions]
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -113,7 +139,7 @@ jobs:
       - name: Prepare release assets and compute checksums
         run: |
           mkdir -p release-assets
-          find downloaded-artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" \) -exec cp {} release-assets/ \;
+          find downloaded-artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" -o -name "*.exe" -o -name "*.deb" -o -name "*.dmg" \) -exec cp {} release-assets/ \;
           cd release-assets
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt

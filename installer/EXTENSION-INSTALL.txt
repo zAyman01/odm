@@ -1,0 +1,39 @@
+odm browser extension
+=====================
+
+The installer put the extension on your computer, but Chrome, Edge, Brave and
+Firefox only let you turn on an extension that is not in their store by hand.
+It takes about a minute.
+
+Before you start: make sure the odm download service (odm-daemon) is running.
+
+Where the extension is
+----------------------
+  Windows: %LOCALAPPDATA%\Programs\odm\extension
+  macOS:   ~/Applications/odm/extension
+  Linux:   /usr/share/odm/extension
+
+Each of those folders holds two folders: "chrome" and "firefox".
+
+Chrome, Edge, Brave (and other Chromium browsers)
+-------------------------------------------------
+1. Open chrome://extensions (Edge: edge://extensions, Brave: brave://extensions).
+2. Turn on "Developer mode" (top right).
+3. Click "Load unpacked" and choose the "chrome" folder.
+
+Firefox
+-------
+1. Open about:debugging#/runtime/this-firefox
+2. Click "Load Temporary Add-on..." and choose the file "manifest.json"
+   inside the "firefox" folder.
+   Firefox removes a temporary add-on when it closes, so repeat this after a
+   restart. (Firefox only keeps add-ons that Mozilla has signed.)
+
+Connect it to odm
+-----------------
+1. Click the odm icon in the browser toolbar, then open Options.
+2. Paste the token from the odm token file:
+     Windows: %APPDATA%\odm\config\token
+     macOS:   ~/Library/Application Support/odm/token
+     Linux:   ~/.config/odm/token
+3. Click "Test Connection".

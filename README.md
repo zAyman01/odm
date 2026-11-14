@@ -42,46 +42,49 @@ A fast, cross-platform download manager written in Rust. It replaces Internet Do
 
 ## Installation
 
-Prebuilt release packages are available on the [GitHub Releases](https://github.com/zAyman01/odm/releases) page.
+Download an installer from the [GitHub Releases](https://github.com/zAyman01/odm/releases) page. Each installer puts odm, the daemon, the GUI and the browser extension files on your computer. Chrome, Edge, Brave and Firefox only let you turn on an extension that is not in their store by hand, so the last step is yours: follow the short steps in `extension/INSTALL.txt` (the installer opens it for you).
 
 ### Windows (`x86_64`)
-1. Download `odm-v0.1.0-x86_64-pc-windows-msvc.zip`.
-2. Extract the archive into a folder of your choice (e.g. `C:\Program Files\odm` or `C:\Users\<user>\AppData\Local\Programs\odm`).
-3. Follow [How to Run odm](#how-to-run-odm): start `odm-daemon.exe` first, then double-click `odm-gui.exe` (or run `odm.exe` from PowerShell / Command Prompt).
+1. Download `odm-v0.1.0-x86_64-pc-windows-msvc-setup.exe` and run it. It installs for your user only, so it does not ask for administrator rights.
+2. Tick the options you want: add `odm` to PATH, start the download service when you sign in, desktop shortcut.
+3. Finish with **Start the odm download service now** and **Open odm** ticked. Then add the browser extension (see below).
+
+Uninstall from **Settings > Apps**. The portable `odm-v0.1.0-x86_64-pc-windows-msvc.zip` is also available.
 
 > [!NOTE]
-> **Windows Defender SmartScreen Notice:**  
-> The v0.1.0 release binaries are open source and currently unsigned. When running on Windows, Defender SmartScreen may display:  
-> *"Windows protected your PC: Microsoft Defender SmartScreen prevented an unrecognized app from starting."*  
+> **Windows Defender SmartScreen Notice:**
+> The v0.1.0 release binaries are open source and currently unsigned. When running on Windows, Defender SmartScreen may display:
+> *"Windows protected your PC: Microsoft Defender SmartScreen prevented an unrecognized app from starting."*
 > To continue, click **More info**, then click **Run anyway**.
 
-### Linux (`x86_64`)
-1. Download `odm-v0.1.0-x86_64-unknown-linux-gnu.tar.gz`.
-2. Extract the archive:
-   ```bash
-   mkdir odm && tar -xzf odm-v0.1.0-x86_64-unknown-linux-gnu.tar.gz -C odm
-   cd odm
-   chmod +x odm odm-daemon odm-gui
-   ```
-3. Follow [How to Run odm](#how-to-run-odm): start `./odm-daemon` first, then `./odm-gui` or `./odm`.
+### Linux (Debian, Ubuntu and derivatives, `x86_64`)
+1. Download `odm-v0.1.0-amd64.deb`.
+2. Install it: `sudo apt install ./odm-v0.1.0-amd64.deb`
+3. Start the download service for your user: `systemctl --user enable --now odm-daemon`
+4. Open **odm** from your applications menu, or run `odm-gui`. The extension files are in `/usr/share/odm/extension`.
+
+On other distributions use `odm-v0.1.0-x86_64-unknown-linux-gnu.tar.gz` (the files sit at the archive root):
+```bash
+mkdir odm && tar -xzf odm-v0.1.0-x86_64-unknown-linux-gnu.tar.gz -C odm
+cd odm
+chmod +x odm odm-daemon odm-gui
+```
+Then follow [How to Run odm](#how-to-run-odm).
 
 ### macOS (Apple Silicon `aarch64` & Intel `x86_64`)
-1. Download the archive for your architecture:
-   - Apple Silicon (M1/M2/M3/M4): `odm-v0.1.0-aarch64-apple-darwin.tar.gz`
-   - Intel: `odm-v0.1.0-x86_64-apple-darwin.tar.gz`
-2. Extract the archive:
-   ```bash
-   mkdir odm && tar -xzf odm-v0.1.0-*-apple-darwin.tar.gz -C odm
-   cd odm
-   chmod +x odm odm-daemon odm-gui
-   ```
-3. Follow [How to Run odm](#how-to-run-odm): start `./odm-daemon` first, then `./odm-gui` or `./odm`.
+1. Download the disk image for your Mac:
+   - Apple Silicon (M1/M2/M3/M4): `odm-v0.1.0-aarch64-apple-darwin.dmg`
+   - Intel: `odm-v0.1.0-x86_64-apple-darwin.dmg`
+2. Open it, right-click **Install odm.command**, choose **Open**, and confirm.
+3. The script copies odm to `~/Applications/odm`, asks whether to start the download service when you sign in, and opens odm. The extension files are in `~/Applications/odm/extension`.
+
+The `.tar.gz` archives are also available; extract one, then follow [How to Run odm](#how-to-run-odm).
 
 > [!NOTE]
-> **macOS Gatekeeper Notice:**  
-> The v0.1.0 release binaries are not notarized with an Apple Developer ID. If macOS displays:  
-> *"odm-gui cannot be opened because Apple cannot check it for malicious software"*,  
-> right-click (or Control-click) `odm-gui` in Finder, click **Open**, and confirm in the dialog prompt. Alternatively, approve the app in **System Settings > Privacy & Security**.
+> **macOS Gatekeeper Notice:**
+> The v0.1.0 release binaries are not notarized with an Apple Developer ID. If macOS displays:
+> *"Install odm.command cannot be opened because Apple cannot check it for malicious software"*,
+> right-click (or Control-click) it in Finder, click **Open**, and confirm in the dialog prompt. Alternatively, approve it in **System Settings > Privacy & Security**.
 
 ---
 
@@ -136,6 +139,8 @@ cargo run --release -p odm-cli -- add https://example.com/file.zip
 ## Browser Extension Setup
 
 The browser extension integrates odm with Chrome, Firefox, Edge, Brave, and other Chromium browsers.
+
+If you used an installer, the unpacked extension is already on your computer in the `extension` folder of the install location (`chrome` and `firefox` inside it); skip to step 2.
 
 1. Download `odm-extension-chrome-v0.1.0.zip` (for Chromium browsers) or `odm-extension-firefox-v0.1.0.zip` (for Firefox) from GitHub Releases and extract it to a directory.
 2. **In Chrome / Chromium:**

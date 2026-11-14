@@ -64,6 +64,7 @@ The code was reviewed after the entries below were first written; they now match
 - Browser extension for Chromium and Firefox (Manifest V3) with download interception, configurable filters, context menu integration ("Download with odm", "Download all links"), and video media detection (.m3u8, .mpd) with badge count.
 
 #### Packaging & Release CI/CD
+- Installers: a Windows `setup.exe` (Inno Setup, per-user, optional PATH and start-at-sign-in), a Debian `.deb` with a systemd user service, and a macOS `.dmg` with an install script. Each includes the unpacked browser extension and the steps to turn it on.
 - Cross-platform extension packaging script (`scripts/package-extension.mjs`) generating Chrome and Firefox ZIP bundles with manifest transformation and unit test suite.
 - GitHub Actions release CI/CD workflow (`.github/workflows/release.yml`) triggered on `v*` tags, building release binaries for Windows (x86_64), Linux (x86_64), macOS (Intel & Apple Silicon), generating `SHA256SUMS.txt`, and publishing release assets.
 - Complete documentation overhaul covering installation, usage, architecture, external dependencies, and OS unsigned binary notices for Windows SmartScreen and macOS Gatekeeper.
