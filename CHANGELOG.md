@@ -6,7 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-The `0.1.0` heading is added when the version is tagged. The code was reviewed after the entries below were first written; they now match what it does.
+## [0.1.0] - 2026-11-14
+
+The code was reviewed after the entries below were first written; they now match what it does.
 
 ### Fixed
 - Security: the daemon token comes from the operating system's random source; CORS and WebSocket upgrades accept only the daemon's own port and extension origins; the Web UI renders downloads with `textContent` and sends a Content-Security-Policy; the extension keeps the token in local storage; every ignored advisory is resolved or justified.
