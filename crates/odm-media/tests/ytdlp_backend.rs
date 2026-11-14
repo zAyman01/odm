@@ -28,6 +28,13 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let joined = args.join(" ");
 
+    // Record every call next to this binary, so tests can check the arguments.
+    if let Some(dir) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|p| p.to_path_buf())) {
+        if let Ok(mut log) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("argv.log")) {
+            let _ = writeln!(log, "{joined}");
+        }
+    }
+
     // Probe mode: -J is present
     if joined.contains("-J") {
         if joined.contains("bad-url") {
@@ -395,4 +402,46 @@ async fn test_windows_cmd_script_support() {
         .unwrap();
     assert_eq!(probe.backend, BackendKind::YtDlp);
     assert_eq!(probe.filename, "Test Video.mp4");
+}
+
+#[tokio::test]
+async fn ytdlp_passes_no_playlist() {
+    let temp_dir = TempDir::new().unwrap();
+    let fake_ytdlp = build_fake_ytdlp(temp_dir.path());
+    let backend = YtDlpBackend::new(fake_ytdlp);
+    let source = Source::Url("https://example.com/watch?v=123&list=PL1".to_string());
+    let mut job = Job::new(
+        source.clone(),
+        temp_dir.path().to_path_buf(),
+        JobOptions::default(),
+    );
+    job.apply_probe(
+        backend
+            .probe(&source, &JobOptions::default())
+            .await
+            .unwrap(),
+    );
+    let store = Store::open_in_memory().unwrap();
+    store.insert_job(&mut job).unwrap();
+    let (_control_handle, control) = ControlToken::new();
+    let (progress, _progress_rx) = ProgressSink::new();
+
+    let outcome = backend
+        .run(JobContext {
+            job: job.clone(),
+            control,
+            progress,
+            store,
+            limiter: Limiter::new(Arc::new(TokenBucket::new(0)), None),
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(outcome, RunOutcome::Completed);
+    let log = std::fs::read_to_string(temp_dir.path().join("argv.log")).unwrap();
+    let calls: Vec<&str> = log.lines().collect();
+    assert_eq!(calls.len(), 2, "one probe and one download: {calls:?}");
+    for call in calls {
+        assert!(call.contains("--no-playlist"), "missing in: {call}");
+    }
 }

@@ -128,6 +128,7 @@ impl YtDlpBackend {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .arg("-J")
+            .arg("--no-playlist")
             .arg("--no-warnings");
 
         if let Some(opts) = opts {
@@ -269,6 +270,8 @@ impl Backend for YtDlpBackend {
             cmd.args(["--add-header", &format!("{name}: {val}")]);
         }
 
+        // A video link that also names a playlist is still one download.
+        cmd.arg("--no-playlist");
         cmd.arg("--no-warnings");
         cmd.arg(url);
 
